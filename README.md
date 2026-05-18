@@ -259,6 +259,62 @@ npm.cmd run build
 - Type `USD` → select `USD000UTSTOM` → change engine/market/board if auto-detected
 - Click Load → currency candles appear
 
+## Technical Research Signals
+
+The backend generates per-indicator **Technical Research Signals** based on the
+latest stored candle and indicator values for a given instrument and timeframe.
+
+### Signal categories
+
+| Signal | Description |
+|--------|-------------|
+| `buy` | Indicator suggests bullish momentum |
+| `sell` | Indicator suggests bearish momentum |
+| `neutral` | Indicator shows no directional bias |
+| `caution` | Condition warrants attention (e.g. overbought) |
+| `info` | Informational only — ATR volatility classification |
+
+### Aggregate score meaning
+
+Individual indicator scores are summed:
+
+| Total score | Aggregate signal |
+|-------------|-----------------|
+| ≥ 4 | `strong_buy` |
+| 2–3 | `buy` |
+| −1 to 1 | `neutral` |
+| −3 to −2 | `sell` |
+| ≤ −4 | `strong_sell` |
+
+Caution override: if 2+ indicators show `caution` and total score > 0, the
+aggregate becomes `caution`.
+
+Confidence is `high` (≥5 actionable indicators), `medium` (3–4), or `low` (<3).
+
+### Covered indicators
+
+`sma_20`, `ema_20`, `rsi_14`, `macd_12_26_9`, `bollinger_bands_20_2`, `atr_14`
+
+### API example
+
+```
+GET http://127.0.0.1:8001/api/v1/analysis/technical-signals?instrument_id=192&timeframe=5m
+```
+
+PowerShell:
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8001/api/v1/analysis/technical-signals?instrument_id=192&timeframe=1d"
+```
+
+### Disclaimer
+
+Signals are **Technical Research Signals** for personal research use only.
+They do not constitute financial advice or recommendations to buy or sell any
+security.
+
+---
+
 ## Known limitations
 
 - **Real-time quotes**: Not supported. Last price is computed from the last stored candle.

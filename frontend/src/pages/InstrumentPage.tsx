@@ -3,14 +3,17 @@ import { useParams } from "react-router-dom";
 
 import { IndicatorPanel } from "../components/charts/IndicatorPanel";
 import { PriceChart } from "../components/charts/PriceChart";
+import { TechnicalSignalsPanel } from "../components/analysis/TechnicalSignalsPanel";
 import { getCandles } from "../api/candles";
 import { getIndicatorValues } from "../api/indicators";
 import { searchInstruments } from "../api/instruments";
 import { loadWorkspace } from "../api/workspace";
+import { getTechnicalSignals } from "../api/analysis";
 import type { Candle } from "../types/candle";
 import type { IndicatorValue } from "../types/indicator";
 import type { InstrumentSearchResult } from "../types/instrument";
 import type { LastPriceSummary, WorkspaceLoadResponse } from "../types/workspace";
+import type { TechnicalSignalResponse } from "../types/analysis";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -103,6 +106,11 @@ export function InstrumentPage() {
   const [candleCount, setCandleCount] = useState(0);
   const [indicatorRowCount, setIndicatorRowCount] = useState(0);
 
+  // Signals
+  const [signals, setSignals] = useState<TechnicalSignalResponse | null>(null);
+  const [signalsLoading, setSignalsLoading] = useState(false);
+  const [signalsError, setSignalsError] = useState<string | null>(null);
+
   // UI states
   const [loadLoading, setLoadLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -169,6 +177,20 @@ export function InstrumentPage() {
     setSearchResults([]);
   }
 
+  async function reloadSignals(id: number, tf: Timeframe) {
+    setSignalsLoading(true);
+    setSignalsError(null);
+    try {
+      const result = await getTechnicalSignals(id, tf);
+      setSignals(result);
+    } catch (err) {
+      setSignalsError(errorMessage(err, "Failed to load signals."));
+      setSignals(null);
+    } finally {
+      setSignalsLoading(false);
+    }
+  }
+
   // Load workspace data
   async function handleLoad() {
     setLoadLoading(true);
@@ -191,7 +213,7 @@ export function InstrumentPage() {
       const id = ws.instrument.id;
       setInstrumentId(id);
 
-      // Load candles and indicators in parallel
+      // Load candles, indicators, and signals in parallel
       const [nextCandles, ...indicatorRows] = await Promise.all([
         getCandles(id, timeframe),
         ...INDICATOR_NAMES.map((name) => getIndicatorValues(id, name, timeframe)),
@@ -207,6 +229,8 @@ export function InstrumentPage() {
       setIndicatorRowCount(
         INDICATOR_NAMES.reduce((n, name) => n + (nextIndicators[name].length), 0),
       );
+
+      await reloadSignals(id, timeframe);
     } catch (err) {
       setLoadError(errorMessage(err, "Failed to load workspace data."));
     } finally {
@@ -237,12 +261,22 @@ export function InstrumentPage() {
       setIndicatorRowCount(
         INDICATOR_NAMES.reduce((n, name) => n + nextIndicators[name].length, 0),
       );
+
+      await reloadSignals(instrumentId, timeframe);
     } catch (err) {
       setLoadError(errorMessage(err, "Failed to reload indicators."));
     } finally {
       setCalcLoading(false);
     }
   }
+
+  // Reload signals when timeframe changes and data is already loaded
+  useEffect(() => {
+    if (instrumentId !== null) {
+      void reloadSignals(instrumentId, timeframe);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeframe, instrumentId]);
 
   const instrument = lastWorkspace?.instrument ?? null;
 
@@ -449,6 +483,15 @@ export function InstrumentPage() {
           error={loadError}
         />
       </div>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Technical Research Signals                                          */}
+      {/* ------------------------------------------------------------------ */}
+      <TechnicalSignalsPanel
+        data={signals}
+        loading={signalsLoading}
+        error={signalsError}
+      />
     </div>
   );
 }

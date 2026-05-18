@@ -494,6 +494,145 @@ a {
   font-size: 11px;
 }
 
+/* ------------------------------------------------------------------ */
+/* Technical Research Signals panel                                     */
+/* ------------------------------------------------------------------ */
+
+.ts-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.ts-aggregate {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  border: 1px solid #2d3540;
+  border-radius: 6px;
+  background: #1b2028;
+}
+
+.ts-aggregate-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.ts-stat {
+  color: #97a3b3;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ts-stat strong {
+  color: #e7ecf2;
+}
+
+.ts-stat-bull { color: #31b181; }
+.ts-stat-bear { color: #eb5757; }
+.ts-stat-caution { color: #f2994a; }
+
+.ts-badge {
+  display: inline-block;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.ts-badge-lg {
+  padding: 5px 12px;
+  font-size: 13px;
+}
+
+.ts-badge-buy    { background: #1a3d2b; color: #31b181; border: 1px solid #27ae60; }
+.ts-badge-sell   { background: #3d1a1a; color: #eb5757; border: 1px solid #c0392b; }
+.ts-badge-neutral { background: #242c38; color: #97a3b3; border: 1px solid #344050; }
+.ts-badge-caution { background: #3d2d10; color: #f2994a; border: 1px solid #d4851a; }
+.ts-badge-info   { background: #102040; color: #56ccf2; border: 1px solid #2d6a8c; }
+
+.ts-signal-list {
+  display: grid;
+  gap: 8px;
+}
+
+.ts-signal-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  gap: 4px 12px;
+  border: 1px solid #2d3540;
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #1b2028;
+}
+
+.ts-signal-left {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ts-signal-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-self: end;
+}
+
+.ts-signal-label {
+  color: #f0f4f8;
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.ts-signal-value {
+  color: #97a3b3;
+  font-size: 11px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ts-signal-reason {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #7a8ea3;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.ts-strength {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.ts-strength-weak   { color: #7a8ea3; }
+.ts-strength-medium { color: #a9c4d8; }
+.ts-strength-strong { color: #e7ecf2; }
+.ts-strength-info   { color: #56ccf2; }
+
+.ts-disclaimer {
+  margin: 0;
+  color: #4a5a6a;
+  font-size: 11px;
+  line-height: 1.5;
+  border-top: 1px solid #2a3038;
+  padding-top: 10px;
+}
+
 @media (max-width: 960px) {
   .dashboard-grid,
   .indicator-panels {
