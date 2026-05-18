@@ -84,6 +84,7 @@ def test_normalize_instrument_rows_maps_legacy_ruble_code() -> None:
         {
             "ticker": "SBER",
             "name": "Sberbank",
+            "engine": "stock",
             "market": "shares",
             "board": "TQBR",
             "currency": "RUB",

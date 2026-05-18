@@ -306,6 +306,194 @@ a {
   align-items: start;
 }
 
+/* ------------------------------------------------------------------ */
+/* Workspace controls                                                   */
+/* ------------------------------------------------------------------ */
+
+.workspace-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 14px;
+  border: 1px solid #2a3038;
+  border-radius: 8px;
+  background: #171b22;
+  padding: 16px;
+}
+
+.control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 120px;
+}
+
+.control-group label {
+  color: #97a3b3;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.control-group input[type="text"],
+.control-group input[type="date"],
+.control-group select {
+  border: 1px solid #344050;
+  border-radius: 6px;
+  background: #151922;
+  color: #f0f4f8;
+  font: inherit;
+  font-weight: 600;
+  padding: 8px 10px;
+}
+
+.control-group input[type="text"] {
+  min-width: 200px;
+}
+
+.control-buttons {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  min-width: unset;
+}
+
+.btn-primary,
+.btn-secondary {
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  padding: 9px 14px;
+  transition: opacity 0.15s;
+  white-space: nowrap;
+}
+
+.btn-primary {
+  background: #2f7d6d;
+  color: #fff;
+}
+
+.btn-secondary {
+  background: #213145;
+  color: #a9d8ff;
+}
+
+.btn-primary:disabled,
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Search dropdown */
+.search-wrapper {
+  position: relative;
+}
+
+.search-spinner {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #97a3b3;
+  font-size: 13px;
+}
+
+.search-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 100;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  border: 1px solid #344050;
+  border-radius: 6px;
+  background: #1b2028;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.search-dropdown li {
+  display: grid;
+  grid-template-columns: 80px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 8px 12px;
+}
+
+.search-dropdown li:hover {
+  background: #242c38;
+}
+
+.search-ticker {
+  color: #f0f4f8;
+  font-weight: 800;
+  font-size: 13px;
+}
+
+.search-name {
+  color: #c7d0dc;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-meta {
+  color: #97a3b3;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* Selected source display */
+.selected-source {
+  color: #a9d8ff;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 8px 0;
+}
+
+/* Instrument metadata line */
+.instrument-meta {
+  margin: 4px 0 0;
+  color: #97a3b3;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Last price panel */
+.last-price-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.last-price-value {
+  font-size: 26px;
+  font-weight: 800;
+  color: #f0f4f8;
+  line-height: 1.1;
+}
+
+.last-price-change {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.last-price-change.positive { color: #31b181; }
+.last-price-change.negative { color: #eb5757; }
+
+.last-price-ts {
+  color: #97a3b3;
+  font-size: 11px;
+}
+
 @media (max-width: 960px) {
   .dashboard-grid,
   .indicator-panels {

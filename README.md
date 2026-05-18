@@ -2,74 +2,83 @@
 
 Local browser-based technical analysis workspace for personal trading research.
 
-The project is intentionally small at this stage: FastAPI, SQLite, Alembic, and
-React/Vite provide the base for loading MOEX market data and building analysis
-features on top of stored candles.
+FastAPI + SQLite + Alembic + React/Vite + TradingView Lightweight Charts.
 
-## Stack
+## Supported timeframes
 
-- Backend: Python, FastAPI, SQLAlchemy 2.x, Alembic
-- Database: SQLite
-- Data processing: pandas, numpy
-- Frontend: React, TypeScript, Vite
-- Charts: TradingView Lightweight Charts
-- API: REST under `/api/v1`
-- First market data source: MOEX ISS
-- Future optional provider boundary: TradingView
+| App timeframe | MOEX fetch | Aggregation |
+|---------------|------------|-------------|
+| `1d`          | 1d candles | none        |
+| `1h`          | 1h candles | none        |
+| `4h`          | 1h candles | → 4h buckets |
+| `15m`         | 1m candles | → 15m buckets |
+| `5m`          | 1m candles | → 5m buckets  |
 
-## Quick Start: SBER Chart
+Aggregation runs in the backend before persisting. The frontend always receives
+candles and indicators keyed by the **app timeframe** label (`5m`, `15m`, `4h`).
+MOEX ISS implementation intervals are never exposed to the frontend.
 
-Run the backend from `backend/`:
+## Supported market sources
+
+Instruments are identified by a **source tuple**: `engine / market / board / ticker`.
+
+| Segment       | engine     | market  | board  | Example ticker |
+|---------------|------------|---------|--------|---------------|
+| Shares (main) | `stock`    | `shares`| `TQBR` | `SBER`        |
+| FX spot       | `currency` | `selt`  | `CETS` | `USD000UTSTOM`|
+| Futures       | `futures`  | `forts` | `RFUD` | `SiH5`        |
+
+A full-market instrument sync is **not required** for normal use.  Search and
+single-instrument load work without it.
+
+## Quick start — using the chart UI (no command line)
+
+1. Start the backend (once):
 
 ```powershell
-cd backend
+cd "C:\Users\Виталий\Desktop\PythonProjects\Tecnical Analyst\backend"
 .\.venv\Scripts\Activate.ps1
 python -m alembic upgrade head
 python -m uvicorn app.main:app --reload
 ```
 
-In a second terminal, sync instruments and SBER daily candles from `backend/`:
+2. Start the frontend (in another terminal):
 
 ```powershell
-cd backend
-.\.venv\Scripts\python.exe -m app.tasks.sync_market_data instruments
-.\.venv\Scripts\python.exe -m app.tasks.sync_market_data candles --ticker SBER --timeframe 1d --start 2024-01-01 --end 2024-06-01
-```
-
-Find the SBER instrument id:
-
-```powershell
-Invoke-RestMethod http://localhost:8000/api/v1/instruments |
-  Where-Object { $_.ticker -eq "SBER" }
-```
-
-Calculate the default indicators for that id:
-
-```powershell
-cd backend
-$sber = Invoke-RestMethod http://localhost:8000/api/v1/instruments |
-  Where-Object { $_.ticker -eq "SBER" }
-.\.venv\Scripts\python.exe -m app.tasks.calculate_indicators defaults --instrument-id $sber.id --timeframe 1d
-```
-
-Run the frontend from `frontend/`:
-
-```powershell
-cd frontend
+cd "C:\Users\Виталий\Desktop\PythonProjects\Tecnical Analyst\frontend"
 npm.cmd install
 npm.cmd run dev
 ```
 
-Open the chart page:
+3. Open `http://localhost:5173/chart`.
 
-```text
-http://localhost:5173/chart
-```
+4. In the **Search instrument** box, type a ticker (e.g. `SBER`, `GAZP`,
+   `USD000UTSTOM`).  Select a result from the dropdown.
 
-The Vite dev server proxies `/api` to `http://localhost:8000`, so the backend
-should be running while the chart page is open.
+5. Choose a **Timeframe** (`5m`, `15m`, `1h`, `4h`, `1d`) and a **date range**.
 
-## Backend Setup
+6. Click **Load / update data**.
+
+The backend syncs candles from MOEX ISS, aggregates them to the selected
+timeframe if needed, calculates default indicators, and the chart updates
+automatically.
+
+7. To change timeframe without re-syncing, adjust the timeframe, click **Load**
+   again.  Previously loaded candles are upserted, not duplicated.
+
+8. Click **Recalculate indicators** to rerun indicator math without re-fetching
+   MOEX data (useful after adjusting date range in the local DB).
+
+## Stack
+
+- Backend: Python 3.11, FastAPI, SQLAlchemy 2.x, Alembic, pandas/numpy
+- Database: SQLite
+- Frontend: React 19, TypeScript, Vite
+- Charts: TradingView Lightweight Charts 5
+- API: REST under `/api/v1`
+- Data source: MOEX ISS
+
+## Backend setup
 
 ```powershell
 cd "C:\Users\Виталий\Desktop\PythonProjects\Tecnical Analyst\backend"
@@ -95,99 +104,90 @@ cd "C:\Users\Виталий\Desktop\PythonProjects\Tecnical Analyst\backend"
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-## Database
+## API endpoints
 
-The default SQLite URL is:
-
-```text
-sqlite:///./technical_analyst.db
-```
-
-Run migrations from `backend/`:
+### Instrument search (no sync required)
 
 ```powershell
-cd "C:\Users\Виталий\Desktop\PythonProjects\Tecnical Analyst\backend"
-.\.venv\Scripts\python.exe -m alembic upgrade head
+Invoke-RestMethod "http://localhost:8000/api/v1/instruments/search?query=SBER"
+Invoke-RestMethod "http://localhost:8000/api/v1/instruments/search?query=USD"
 ```
 
-## MOEX Sync
-
-Sync MOEX TQBR share instruments:
+### Load workspace (sync + indicators in one call)
 
 ```powershell
-cd "C:\Users\Виталий\Desktop\PythonProjects\Tecnical Analyst\backend"
-.\.venv\Scripts\python.exe -m app.tasks.sync_market_data instruments
+Invoke-RestMethod -Method Post -ContentType "application/json" `
+  -Body '{"ticker":"SBER","engine":"stock","market":"shares","board":"TQBR","timeframe":"1d","start":"2024-01-01","end":"2024-06-01","calculate_indicators":true}' `
+  http://localhost:8000/api/v1/workspace
 ```
 
-Sync SBER daily candles:
+Currency / FX example:
 
 ```powershell
-cd "C:\Users\Виталий\Desktop\PythonProjects\Tecnical Analyst\backend"
-.\.venv\Scripts\python.exe -m app.tasks.sync_market_data candles --ticker SBER --timeframe 1d --start 2024-01-01 --end 2024-03-01
+Invoke-RestMethod -Method Post -ContentType "application/json" `
+  -Body '{"ticker":"USD000UTSTOM","engine":"currency","market":"selt","board":"CETS","timeframe":"1d","start":"2024-01-01","end":"2024-06-01","calculate_indicators":true}' `
+  http://localhost:8000/api/v1/workspace
 ```
 
-API sync examples while the backend is running:
+Futures example:
+
+```powershell
+Invoke-RestMethod -Method Post -ContentType "application/json" `
+  -Body '{"ticker":"SiH5","engine":"futures","market":"forts","board":"RFUD","timeframe":"1h","start":"2025-01-01","end":"2025-03-01","calculate_indicators":true}' `
+  http://localhost:8000/api/v1/workspace
+```
+
+### Sync candles (separate, with optional indicator calculation)
+
+```powershell
+# Daily candles — direct MOEX fetch
+Invoke-RestMethod -Method Post "http://localhost:8000/api/v1/sync/moex/candles?ticker=SBER&timeframe=1d&start=2024-01-01&end=2024-06-01&calculate_indicators=true"
+
+# 1h candles — direct MOEX fetch
+Invoke-RestMethod -Method Post "http://localhost:8000/api/v1/sync/moex/candles?ticker=SBER&timeframe=1h&start=2024-01-01&end=2024-02-01&calculate_indicators=true"
+
+# 15m candles — fetches 1m from MOEX, aggregates to 15m
+Invoke-RestMethod -Method Post "http://localhost:8000/api/v1/sync/moex/candles?ticker=SBER&timeframe=15m&start=2024-01-15&end=2024-01-20&calculate_indicators=true"
+
+# Currency instrument with explicit source tuple
+Invoke-RestMethod -Method Post "http://localhost:8000/api/v1/sync/moex/candles?ticker=USD000UTSTOM&engine=currency&market=selt&board=CETS&timeframe=1d&start=2024-01-01&end=2024-06-01"
+```
+
+### Upsert one instrument
+
+```powershell
+Invoke-RestMethod -Method Post -ContentType "application/json" `
+  -Body '{"ticker":"SBER","engine":"stock","market":"shares","board":"TQBR"}' `
+  http://localhost:8000/api/v1/sync/moex/instrument
+```
+
+### Full-market instrument sync (optional, stocks only)
 
 ```powershell
 Invoke-RestMethod -Method Post http://localhost:8000/api/v1/sync/moex/instruments
-Invoke-RestMethod -Method Post "http://localhost:8000/api/v1/sync/moex/candles?ticker=SBER&timeframe=1d&start=2024-01-01&end=2024-03-01"
 ```
 
-Inspect stored data:
+### List and read
 
 ```powershell
 Invoke-RestMethod http://localhost:8000/api/v1/instruments
 Invoke-RestMethod "http://localhost:8000/api/v1/candles?instrument_id=1&timeframe=1d"
+Invoke-RestMethod "http://localhost:8000/api/v1/indicators?instrument_id=1&indicator_name=rsi_14&timeframe=1d"
+Invoke-RestMethod "http://localhost:8000/api/v1/instruments/1/summary?timeframe=1d"
 ```
 
-Supported MOEX candle timeframes: `1m`, `10m`, `1h`, `1d`, `1w`, `1mo`.
+## Indicator calculation (CLI)
 
-## Indicator Calculation
-
-After syncing candles, calculate the default indicator set from `backend/`:
+Calculate the default indicator set for instrument id 1, timeframe 1d:
 
 ```powershell
-cd backend
-python -m alembic upgrade head
-python -m app.tasks.sync_market_data instruments
-python -m app.tasks.sync_market_data candles --ticker SBER --timeframe 1d --start 2024-01-01 --end 2024-06-01
-python -m app.tasks.calculate_indicators defaults --instrument-id 1 --timeframe 1d
+cd "C:\Users\Виталий\Desktop\PythonProjects\Tecnical Analyst\backend"
+.\.venv\Scripts\python.exe -m app.tasks.calculate_indicators defaults --instrument-id 1 --timeframe 1d
 ```
 
-Calculate one indicator with custom parameters:
+Default indicators: `sma_20`, `ema_20`, `rsi_14`, `macd_12_26_9`, `bollinger_bands_20_2`, `atr_14`.
 
-```powershell
-python -m app.tasks.calculate_indicators one --instrument-id 1 --timeframe 1d --indicator rsi --window 14
-python -m app.tasks.calculate_indicators one --instrument-id 1 --timeframe 1d --indicator sma --window 50
-```
-
-Stored indicator names use stable parameter suffixes:
-
-```text
-sma_20
-ema_20
-rsi_14
-macd_12_26_9
-bollinger_bands_20_2
-atr_14
-```
-
-API examples while the backend is running:
-
-```powershell
-Invoke-RestMethod -Method Post "http://localhost:8000/api/v1/indicators/calculate-defaults?instrument_id=1&timeframe=1d"
-Invoke-RestMethod -Method Post "http://localhost:8000/api/v1/indicators/calculate?instrument_id=1&timeframe=1d&indicator_name=rsi_14"
-Invoke-RestMethod -Method Post -ContentType "application/json" -Body '{"instrument_id":1,"timeframe":"1d","indicator_name":"macd","params":{"fast_period":12,"slow_period":26,"signal_period":9}}' http://localhost:8000/api/v1/indicators/calculate
-```
-
-Inspect stored indicator values:
-
-```powershell
-Invoke-RestMethod "http://localhost:8000/api/v1/indicators?instrument_id=1&indicator_name=rsi_14"
-sqlite3 technical_analyst.db "select indicator_name, timeframe, timestamp, values from indicator_values order by timestamp limit 5;"
-```
-
-## Frontend Setup
+## Frontend setup
 
 ```powershell
 cd "C:\Users\Виталий\Desktop\PythonProjects\Tecnical Analyst\frontend"
@@ -195,12 +195,36 @@ npm.cmd install
 npm.cmd run dev
 ```
 
-Open the Vite URL shown in the terminal, usually `http://localhost:5173`.
-The first chart screen is available at `http://localhost:5173/chart`.
-
 Build check:
 
 ```powershell
-cd "C:\Users\Виталий\Desktop\PythonProjects\Tecnical Analyst\frontend"
 npm.cmd run build
 ```
+
+## Smoke test checklist
+
+- Start backend → `python -m uvicorn app.main:app --reload`
+- Start frontend → `npm.cmd run dev`
+- Open `http://localhost:5173/chart`
+- Type `SBER` in the search box → select from results
+- Choose timeframe `1d`, date range 2024-01-01 to 2024-06-01
+- Click **Load / update data** → chart appears with candles and indicators
+- Change timeframe to `1h` → click Load → hourly chart appears
+- Change timeframe to `15m` → click Load → 15m chart appears (MOEX must return enough 1m data)
+- Change timeframe to `4h` → click Load → 4h bars appear
+- Type `USD` → select `USD000UTSTOM` → change engine/market/board if auto-detected
+- Click Load → currency candles appear
+
+## Known limitations
+
+- **Real-time quotes**: Not supported. Last price is computed from the last stored candle.
+- **5m/15m depth**: MOEX returns 1m data for approximately the last 30 days. Requesting a
+  range older than that will return fewer candles or none.
+- **4h alignment**: 4h buckets are aligned to midnight UTC. Russian market hours may
+  produce partial bars at session open/close.
+- **Futures tickers**: Active contract codes (e.g. `SiH5`, `RIH5`) change each quarter.
+  You must know the current contract code.
+- **Instrument uniqueness**: The DB unique constraint is on `ticker` only. Two instruments
+  on different boards with the same ticker are not supported without a schema migration.
+  Use the source-tuple repository methods to look them up correctly.
+- **ADX, Stochastic, OBV**: Registered but not yet implemented (raise `NotImplementedError`).

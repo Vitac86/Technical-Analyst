@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -11,11 +14,13 @@ from app.services.market_data.base import MarketDataProvider
 
 
 MOEX_BASE_URL = "https://iss.moex.com/iss"
-MOEX_SHARES_BOARD = "TQBR"
+MOEX_ENGINE = "stock"
 MOEX_MARKET = "shares"
+MOEX_SHARES_BOARD = "TQBR"
 MOEX_TIME_ZONE = ZoneInfo("Europe/Moscow")
 
-SUPPORTED_TIMEFRAMES: dict[str, int] = {
+# MOEX ISS candle interval codes
+MOEX_TIMEFRAME_MAP: dict[str, int] = {
     "1m": 1,
     "10m": 10,
     "1h": 60,
@@ -24,14 +29,51 @@ SUPPORTED_TIMEFRAMES: dict[str, int] = {
     "1mo": 31,
 }
 
+# Known MOEX security group → (engine, market) mapping.
+# Groups follow the pattern "{engine}_{market}" which we parse directly,
+# but explicit entries here override parsing for clarity.
+_GROUP_ENGINE_MARKET: dict[str, tuple[str, str]] = {
+    "stock_shares": ("stock", "shares"),
+    "stock_bonds": ("stock", "bonds"),
+    "stock_dr": ("stock", "shares"),
+    "stock_etf": ("stock", "shares"),
+    "stock_ppif": ("stock", "shares"),
+    "stock_index": ("stock", "ndm"),
+    "currency_selt": ("currency", "selt"),
+    "currency_metal": ("currency", "metal"),
+    "futures_forts": ("futures", "forts"),
+    "futures_options": ("futures", "options"),
+}
+
+# Known primary_boardid → default board for use when group is unavailable.
+_BOARD_DEFAULTS: dict[str, tuple[str, str, str]] = {
+    "TQBR": ("stock", "shares", "TQBR"),
+    "TQBS": ("stock", "shares", "TQBS"),
+    "TQNL": ("stock", "shares", "TQNL"),
+    "TQOB": ("stock", "bonds", "TQOB"),
+    "TQCB": ("stock", "bonds", "TQCB"),
+    "CETS": ("currency", "selt", "CETS"),
+    "RFUD": ("futures", "forts", "RFUD"),
+}
+
+
+@dataclass(frozen=True)
+class MoexInstrumentSource:
+    """Full MOEX ISS address for one instrument."""
+
+    engine: str
+    market: str
+    board: str
+    ticker: str
+
 
 def timeframe_to_interval(timeframe: str) -> int:
-    """Map the app timeframe string to a MOEX ISS candle interval."""
+    """Map a MOEX timeframe string to its ISS interval code."""
     normalized = timeframe.strip()
     try:
-        return SUPPORTED_TIMEFRAMES[normalized]
+        return MOEX_TIMEFRAME_MAP[normalized]
     except KeyError as exc:
-        supported = ", ".join(SUPPORTED_TIMEFRAMES)
+        supported = ", ".join(MOEX_TIMEFRAME_MAP)
         raise ValueError(
             f"Unsupported MOEX timeframe '{timeframe}'. "
             f"Supported timeframes: {supported}."
@@ -39,7 +81,7 @@ def timeframe_to_interval(timeframe: str) -> int:
 
 
 def extract_table_rows(payload: dict[str, Any], table_name: str) -> list[dict[str, Any]]:
-    """Return ISS table rows as dictionaries keyed by column name."""
+    """Return ISS table rows as dicts keyed by column name."""
     table = payload.get(table_name)
     if not isinstance(table, dict):
         return []
@@ -58,7 +100,7 @@ def extract_table_rows(payload: dict[str, Any], table_name: str) -> list[dict[st
 
 
 def normalize_instrument_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """Normalize MOEX ISS securities rows into app instrument dictionaries."""
+    """Normalize MOEX ISS securities rows (TQBR board) into app instrument dicts."""
     instruments: list[dict[str, Any]] = []
     seen_tickers: set[str] = set()
 
@@ -77,6 +119,7 @@ def normalize_instrument_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "ticker": ticker,
                 "name": name,
+                "engine": MOEX_ENGINE,
                 "market": MOEX_MARKET,
                 "board": _upper_string(row.get("BOARDID")) or MOEX_SHARES_BOARD,
                 "currency": _normalize_currency(
@@ -95,7 +138,7 @@ def normalize_candle_rows(
     ticker: str,
     timeframe: str,
 ) -> list[dict[str, Any]]:
-    """Normalize MOEX ISS candle rows into app candle dictionaries."""
+    """Normalize MOEX ISS candle rows into app candle dicts."""
     timeframe_to_interval(timeframe)
     normalized_ticker = ticker.strip().upper()
     candles: list[dict[str, Any]] = []
@@ -108,8 +151,49 @@ def normalize_candle_rows(
     return candles
 
 
+def normalize_search_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Normalize MOEX ISS security search results into instrument candidate dicts.
+
+    Uses the ``group`` field to derive engine/market and ``primary_boardid`` as
+    the board. Currency is not available in search results and is left as None.
+    """
+    results: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for row in extract_table_rows(payload, "securities"):
+        ticker = _upper_string(row.get("secid"))
+        if ticker is None or ticker in seen:
+            continue
+        seen.add(ticker)
+
+        name = (
+            _clean_string(row.get("name"))
+            or _clean_string(row.get("shortname"))
+            or ticker
+        )
+        group = _clean_string(row.get("group")) or ""
+        board = _upper_string(row.get("primary_boardid")) or ""
+        engine, market = _resolve_engine_market(group, board)
+        is_active = _coerce_is_traded(row.get("is_traded"))
+
+        results.append(
+            {
+                "ticker": ticker,
+                "name": name,
+                "engine": engine,
+                "market": market,
+                "board": board or None,
+                "currency": None,
+                "is_active": is_active,
+                "group": group or None,
+            }
+        )
+
+    return results
+
+
 class MoexProvider(MarketDataProvider):
-    """MOEX ISS provider for Russian stock market shares."""
+    """MOEX ISS market data provider."""
 
     name = "moex"
 
@@ -123,12 +207,83 @@ class MoexProvider(MarketDataProvider):
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
 
-    async def fetch_instruments(self) -> list[dict[str, Any]]:
-        """Fetch active MOEX TQBR share instruments."""
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    async def find_instruments(
+        self,
+        query: str,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Search MOEX for instruments matching *query* without syncing the full market.
+
+        Returns candidates suitable for user selection (ticker, name, engine,
+        market, board, is_active, group). Currency is not available at search
+        time and is returned as None.
+        """
         async with self._client_context() as client:
             payload = await self._get_json(
                 client,
-                f"/engines/stock/markets/{MOEX_MARKET}/boards/{MOEX_SHARES_BOARD}/securities.json",
+                "/securities.json",
+                params={
+                    "q": query.strip(),
+                    "iss.meta": "off",
+                    "lang": "ru",
+                    "limit": limit,
+                    "securities.columns": (
+                        "secid,shortname,name,is_traded,type,group,"
+                        "primary_boardid,marketprice_boardid"
+                    ),
+                },
+            )
+        return normalize_search_rows(payload)
+
+    async def fetch_instrument(
+        self,
+        source: MoexInstrumentSource,
+    ) -> dict[str, Any] | None:
+        """Fetch metadata for one specific instrument from MOEX ISS.
+
+        Returns an instrument dict compatible with the repository upsert,
+        or None if not found.
+        """
+        async with self._client_context() as client:
+            payload = await self._get_json(
+                client,
+                (
+                    f"/engines/{source.engine}/markets/{source.market}"
+                    f"/boards/{source.board}/securities/{source.ticker}.json"
+                ),
+                params={
+                    "iss.meta": "off",
+                    "iss.only": "securities",
+                    "securities.columns": (
+                        "SECID,SHORTNAME,SECNAME,BOARDID,STATUS,IS_TRADED,"
+                        "CURRENCYID,FACEUNIT"
+                    ),
+                },
+            )
+        rows = normalize_instrument_rows(payload)
+        for row in rows:
+            if row["ticker"] == source.ticker.strip().upper():
+                row["engine"] = source.engine
+                row["market"] = source.market
+                return row
+        # If not in rows, build a minimal entry from the source tuple.
+        if rows:
+            row = rows[0]
+            row["engine"] = source.engine
+            row["market"] = source.market
+            return row
+        return None
+
+    async def fetch_instruments(self) -> list[dict[str, Any]]:
+        """Fetch active MOEX TQBR share instruments (legacy full-market sync)."""
+        async with self._client_context() as client:
+            payload = await self._get_json(
+                client,
+                f"/engines/{MOEX_ENGINE}/markets/{MOEX_MARKET}/boards/{MOEX_SHARES_BOARD}/securities.json",
                 params={
                     "iss.meta": "off",
                     "iss.only": "securities",
@@ -147,29 +302,44 @@ class MoexProvider(MarketDataProvider):
         start: date | datetime,
         end: date | datetime,
     ) -> list[dict[str, Any]]:
-        """Fetch MOEX candles for a ticker, following ISS pagination."""
+        """Fetch MOEX candles for a ticker on the default TQBR board."""
+        source = MoexInstrumentSource(
+            engine=MOEX_ENGINE,
+            market=MOEX_MARKET,
+            board=MOEX_SHARES_BOARD,
+            ticker=ticker.strip().upper(),
+        )
+        return await self.fetch_candles_by_source(source, timeframe, start, end)
+
+    async def fetch_candles_by_source(
+        self,
+        source: MoexInstrumentSource,
+        timeframe: str,
+        start: date | datetime,
+        end: date | datetime,
+    ) -> list[dict[str, Any]]:
+        """Fetch MOEX candles for any engine/market/board/ticker combination."""
         interval = timeframe_to_interval(timeframe)
-        normalized_ticker = ticker.strip().upper()
+        normalized_ticker = source.ticker.strip().upper()
         if not normalized_ticker:
             raise ValueError("Ticker must not be empty.")
 
         candles: list[dict[str, Any]] = []
         start_index = 0
+        path = (
+            f"/engines/{source.engine}/markets/{source.market}"
+            f"/boards/{source.board}/securities/{normalized_ticker}/candles.json"
+        )
 
         async with self._client_context() as client:
             while True:
                 payload = await self._get_json(
                     client,
-                    (
-                        f"/engines/stock/markets/{MOEX_MARKET}/boards/"
-                        f"{MOEX_SHARES_BOARD}/securities/{normalized_ticker}/candles.json"
-                    ),
+                    path,
                     params={
                         "iss.meta": "off",
                         "iss.only": "candles,candles.cursor",
-                        "candles.columns": (
-                            "begin,end,open,high,low,close,volume,value"
-                        ),
+                        "candles.columns": "begin,end,open,high,low,close,volume,value",
                         "from": _format_date(start),
                         "till": _format_date(end),
                         "interval": interval,
@@ -186,6 +356,10 @@ class MoexProvider(MarketDataProvider):
                 start_index = next_start
 
         return candles
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
     @asynccontextmanager
     async def _client_context(self) -> AsyncIterator[httpx.AsyncClient]:
@@ -212,6 +386,23 @@ class MoexProvider(MarketDataProvider):
         if not isinstance(payload, dict):
             return {}
         return payload
+
+
+# ------------------------------------------------------------------
+# Module-level helpers
+# ------------------------------------------------------------------
+
+def _resolve_engine_market(group: str, board: str) -> tuple[str | None, str | None]:
+    """Derive (engine, market) from security group string or board fallback."""
+    if group and group in _GROUP_ENGINE_MARKET:
+        return _GROUP_ENGINE_MARKET[group]
+    if group and "_" in group:
+        parts = group.split("_", 1)
+        return parts[0], parts[1]
+    if board and board in _BOARD_DEFAULTS:
+        eng, mkt, _ = _BOARD_DEFAULTS[board]
+        return eng, mkt
+    return None, None
 
 
 def _normalize_candle_row(
@@ -295,6 +486,12 @@ def _normalize_currency(value: str | None) -> str | None:
     if value in {"SUR", "RUR"}:
         return "RUB"
     return value
+
+
+def _coerce_is_traded(value: Any) -> bool:
+    if value is None:
+        return True
+    return str(value).strip() in {"1", "true", "True", "yes", "Yes"}
 
 
 def _is_active_security(row: dict[str, Any]) -> bool:

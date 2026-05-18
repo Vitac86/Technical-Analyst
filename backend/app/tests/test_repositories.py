@@ -64,6 +64,72 @@ def test_instrument_upsert_does_not_duplicate_tickers(db_session: Session) -> No
     assert stored.is_active is False
 
 
+def test_instrument_engine_field_is_stored(db_session: Session) -> None:
+    instrument_repository.upsert_instrument(
+        db_session,
+        {
+            "ticker": "USD000UTSTOM",
+            "name": "USD/RUB",
+            "engine": "currency",
+            "market": "selt",
+            "board": "CETS",
+            "currency": "RUB",
+            "is_active": True,
+        },
+    )
+    stored = instrument_repository.get_instrument_by_ticker(db_session, "USD000UTSTOM")
+    assert stored is not None
+    assert stored.engine == "currency"
+    assert stored.market == "selt"
+    assert stored.board == "CETS"
+
+
+def test_get_instrument_by_source_finds_by_full_tuple(db_session: Session) -> None:
+    instrument_repository.upsert_instrument(
+        db_session,
+        {
+            "ticker": "SBER",
+            "name": "Sberbank",
+            "engine": "stock",
+            "market": "shares",
+            "board": "TQBR",
+            "currency": "RUB",
+            "is_active": True,
+        },
+    )
+    result = instrument_repository.get_instrument_by_source(
+        db_session,
+        engine="stock",
+        market="shares",
+        board="TQBR",
+        ticker="SBER",
+    )
+    assert result is not None
+    assert result.ticker == "SBER"
+
+
+def test_get_instrument_by_source_fallback_to_ticker(db_session: Session) -> None:
+    """Instruments with NULL engine/market/board are still found by ticker fallback."""
+    instrument_repository.upsert_instrument(
+        db_session,
+        {
+            "ticker": "GAZP",
+            "name": "Gazprom",
+            "currency": "RUB",
+            "is_active": True,
+        },
+    )
+    result = instrument_repository.get_instrument_by_source(
+        db_session,
+        engine="stock",
+        market="shares",
+        board="TQBR",
+        ticker="GAZP",
+    )
+    assert result is not None
+    assert result.ticker == "GAZP"
+
+
 def test_candle_upsert_does_not_duplicate_candles(db_session: Session) -> None:
     instrument, _, _ = instrument_repository.upsert_instrument(
         db_session,

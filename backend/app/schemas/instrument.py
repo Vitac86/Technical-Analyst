@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict
 class InstrumentBase(BaseModel):
     ticker: str
     name: str
+    engine: str | None = None
     market: str | None = None
     board: str | None = None
     currency: str | None = None

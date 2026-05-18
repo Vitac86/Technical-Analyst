@@ -13,12 +13,15 @@ def list_indicator_values(
     db: Session,
     instrument_id: int,
     indicator_name: str | None = None,
+    timeframe: str | None = None,
 ) -> list[IndicatorValue]:
     statement: Select[tuple[IndicatorValue]] = select(IndicatorValue).where(
         IndicatorValue.instrument_id == instrument_id,
     )
     if indicator_name is not None:
         statement = statement.where(IndicatorValue.indicator_name == indicator_name)
+    if timeframe is not None:
+        statement = statement.where(IndicatorValue.timeframe == timeframe)
     statement = statement.order_by(IndicatorValue.timestamp)
     result = db.execute(statement)
     return list(result.scalars().all())

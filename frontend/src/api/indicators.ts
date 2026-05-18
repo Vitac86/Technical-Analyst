@@ -11,13 +11,9 @@ export async function getIndicatorValues(
     indicator_name: indicatorName,
   });
 
-  const rows = await apiClient.get<IndicatorValue[]>(
-    `/indicators?${params.toString()}`,
-  );
-
-  if (timeframe === undefined) {
-    return rows;
+  if (timeframe !== undefined) {
+    params.set("timeframe", timeframe);
   }
 
-  return rows.filter((row) => row.timeframe === timeframe);
+  return apiClient.get<IndicatorValue[]>(`/indicators?${params.toString()}`);
 }

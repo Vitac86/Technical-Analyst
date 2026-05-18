@@ -21,6 +21,32 @@ def get_instrument_by_ticker(db: Session, ticker: str) -> Instrument | None:
     return db.execute(statement).scalar_one_or_none()
 
 
+def get_instrument_by_source(
+    db: Session,
+    engine: str,
+    market: str,
+    board: str,
+    ticker: str,
+) -> Instrument | None:
+    """Look up instrument by the full MOEX source tuple (engine, market, board, ticker).
+
+    Falls back to ticker-only lookup so existing instruments without engine/market/board
+    populated are still found.
+    """
+    normalized = ticker.strip().upper()
+    statement = select(Instrument).where(
+        Instrument.ticker == normalized,
+        Instrument.engine == engine,
+        Instrument.market == market,
+        Instrument.board == board,
+    )
+    result = db.execute(statement).scalar_one_or_none()
+    if result is not None:
+        return result
+    # Fallback: ticker only (handles legacy rows that lack engine/market/board)
+    return get_instrument_by_ticker(db, normalized)
+
+
 def upsert_instrument(
     db: Session,
     instrument_data: Mapping[str, Any],
@@ -82,6 +108,7 @@ def _instrument_values(instrument_data: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "ticker": ticker,
         "name": _clean_string(instrument_data.get("name")) or ticker,
+        "engine": _clean_string(instrument_data.get("engine")),
         "market": _clean_string(instrument_data.get("market")),
         "board": _clean_string(instrument_data.get("board")),
         "currency": _clean_string(instrument_data.get("currency")),

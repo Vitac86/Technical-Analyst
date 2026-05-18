@@ -11,7 +11,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      const body = (await response.json()) as { detail?: string };
+      if (body.detail) detail = body.detail;
+    } catch {
+      // ignore JSON parse failure
+    }
+    throw new Error(`API request failed: ${detail}`);
   }
 
   return response.json() as Promise<T>;
@@ -19,4 +26,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const apiClient = {
   get: <T>(path: string) => request<T>(path),
+  post: <T>(path: string, body: unknown) =>
+    request<T>(path, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };
