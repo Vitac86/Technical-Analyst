@@ -527,7 +527,26 @@ def generate_technical_signals(
     timeframe: str,
 ) -> TechnicalSignalResponse:
     candle = _load_latest_candle(db, instrument_id, timeframe)
-    close = float(candle.close) if candle is not None else 0.0
+    if candle is None:
+        return TechnicalSignalResponse(
+            instrument_id=instrument_id,
+            timeframe=timeframe,
+            aggregate=TechnicalSignalAggregate(
+                instrument_id=instrument_id,
+                timeframe=timeframe,
+                total_score=0,
+                signal="no_data",
+                confidence="low",
+                bullish_count=0,
+                bearish_count=0,
+                caution_count=0,
+                info_count=0,
+                generated_at=datetime.now(tz=timezone.utc),
+            ),
+            signals=[],
+            message="No candles available for this instrument and timeframe.",
+        )
+    close = float(candle.close)
 
     sma_rows = _load_latest_indicator_rows(db, instrument_id, timeframe, "sma_20", limit=1)
     ema_rows = _load_latest_indicator_rows(db, instrument_id, timeframe, "ema_20", limit=1)

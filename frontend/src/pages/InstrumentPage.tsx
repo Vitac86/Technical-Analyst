@@ -4,16 +4,19 @@ import { useParams } from "react-router-dom";
 import { IndicatorPanel } from "../components/charts/IndicatorPanel";
 import { PriceChart } from "../components/charts/PriceChart";
 import { TechnicalSignalsPanel } from "../components/analysis/TechnicalSignalsPanel";
+import { QuoteSummaryCard } from "../components/quotes/QuoteSummaryCard";
 import { getCandles } from "../api/candles";
 import { getIndicatorValues } from "../api/indicators";
 import { searchInstruments } from "../api/instruments";
 import { loadWorkspace } from "../api/workspace";
 import { getTechnicalSignals } from "../api/analysis";
+import { getMoexQuote } from "../api/quotes";
 import type { Candle } from "../types/candle";
 import type { IndicatorValue } from "../types/indicator";
 import type { InstrumentSearchResult } from "../types/instrument";
 import type { LastPriceSummary, WorkspaceLoadResponse } from "../types/workspace";
 import type { TechnicalSignalResponse } from "../types/analysis";
+import type { QuoteSnapshot } from "../types/quote";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -38,6 +41,9 @@ type InstrumentSource = {
   market: string;
   board: string;
 };
+
+const REFRESH_OPTIONS = ["off", "15", "30", "60"] as const;
+type RefreshInterval = (typeof REFRESH_OPTIONS)[number];
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
@@ -67,6 +73,11 @@ function formatChange(change: number | null, changePct: number | null): string {
   if (change === null || changePct === null) return "—";
   const sign = change >= 0 ? "+" : "";
   return `${sign}${change.toFixed(2)} (${sign}${changePct.toFixed(2)}%)`;
+}
+
+function formatTime(d: Date | null): string {
+  if (d === null) return "—";
+  return d.toLocaleTimeString("ru-RU");
 }
 
 // ---------------------------------------------------------------------------
@@ -111,10 +122,28 @@ export function InstrumentPage() {
   const [signalsLoading, setSignalsLoading] = useState(false);
   const [signalsError, setSignalsError] = useState<string | null>(null);
 
+  // Quote
+  const [quote, setQuote] = useState<QuoteSnapshot | null>(null);
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [quoteError, setQuoteError] = useState<string | null>(null);
+  const [lastQuoteRefreshTime, setLastQuoteRefreshTime] = useState<Date | null>(null);
+  const [lastCandleSyncTime, setLastCandleSyncTime] = useState<Date | null>(null);
+
+  // Auto-refresh
+  const [autoRefreshInterval, setAutoRefreshInterval] = useState<RefreshInterval>("off");
+  const [alsoRefreshCandles, setAlsoRefreshCandles] = useState(false);
+
   // UI states
   const [loadLoading, setLoadLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [calcLoading, setCalcLoading] = useState(false);
+
+  // Refs for stable closures in the auto-refresh timer
+  const sourceRef = useRef(source);
+  sourceRef.current = source;
+  const alsoRefreshCandlesRef = useRef(alsoRefreshCandles);
+  alsoRefreshCandlesRef.current = alsoRefreshCandles;
+  const isRefreshingRef = useRef(false);
 
   // Keep search input in sync with route ticker on first render
   useEffect(() => {
@@ -191,6 +220,27 @@ export function InstrumentPage() {
     }
   }
 
+  async function fetchQuote(src: InstrumentSource) {
+    setQuoteLoading(true);
+    setQuoteError(null);
+    try {
+      const q = await getMoexQuote(src);
+      setQuote(q);
+      setLastQuoteRefreshTime(new Date());
+    } catch {
+      setQuoteError("Quote unavailable");
+      setQuote(null);
+    } finally {
+      setQuoteLoading(false);
+    }
+  }
+
+  // Fetch quote whenever source changes
+  useEffect(() => {
+    void fetchQuote(source);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source.ticker, source.engine, source.market, source.board]);
+
   // Load workspace data
   async function handleLoad() {
     setLoadLoading(true);
@@ -212,6 +262,7 @@ export function InstrumentPage() {
       setLastPrice(ws.last_price);
       const id = ws.instrument.id;
       setInstrumentId(id);
+      setLastCandleSyncTime(new Date());
 
       // Load candles, indicators, and signals in parallel
       const [nextCandles, ...indicatorRows] = await Promise.all([
@@ -278,6 +329,70 @@ export function InstrumentPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timeframe, instrumentId]);
 
+  // Auto-refresh timer — recreates only when interval setting changes
+  useEffect(() => {
+    if (autoRefreshInterval === "off") return;
+
+    const ms = parseInt(autoRefreshInterval, 10) * 1000;
+    const id = setInterval(async () => {
+      if (isRefreshingRef.current) return;
+      isRefreshingRef.current = true;
+      try {
+        await fetchQuote(sourceRef.current);
+        if (alsoRefreshCandlesRef.current) {
+          // Full workspace reload — uses latest source/timeframe via handleLoad
+          await (async () => {
+            setLoadLoading(true);
+            setLoadError(null);
+            try {
+              const src = sourceRef.current;
+              const ws = await loadWorkspace({
+                ticker: src.ticker,
+                engine: src.engine,
+                market: src.market,
+                board: src.board,
+                timeframe,
+                start: startDate,
+                end: endDate,
+                calculate_indicators: true,
+              });
+              setLastWorkspace(ws);
+              setLastPrice(ws.last_price);
+              const wid = ws.instrument.id;
+              setInstrumentId(wid);
+              setLastCandleSyncTime(new Date());
+
+              const [nextCandles, ...indicatorRows] = await Promise.all([
+                getCandles(wid, timeframe),
+                ...INDICATOR_NAMES.map((name) => getIndicatorValues(wid, name, timeframe)),
+              ]);
+              setCandles(nextCandles);
+              setCandleCount(nextCandles.length);
+              const nextIndicators = Object.fromEntries(
+                INDICATOR_NAMES.map((name, i) => [name, indicatorRows[i] ?? []]),
+              ) as IndicatorMap;
+              setIndicators(nextIndicators);
+              setIndicatorRowCount(
+                INDICATOR_NAMES.reduce((n, name) => n + nextIndicators[name].length, 0),
+              );
+              await reloadSignals(wid, timeframe);
+            } catch (err) {
+              setLoadError(errorMessage(err, "Auto-refresh failed."));
+            } finally {
+              setLoadLoading(false);
+            }
+          })();
+        }
+      } finally {
+        isRefreshingRef.current = false;
+      }
+    }, ms);
+
+    return () => clearInterval(id);
+    // timeframe/startDate/endDate included so candle refresh uses correct range
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRefreshInterval, timeframe, startDate, endDate]);
+
   const instrument = lastWorkspace?.instrument ?? null;
 
   return (
@@ -301,7 +416,7 @@ export function InstrumentPage() {
           ) : null}
         </div>
 
-        {/* Last-price panel */}
+        {/* Last-price panel (from candle history) */}
         {lastPrice?.last_close != null ? (
           <div className="last-price-panel">
             <span className="last-price-value">{lastPrice.last_close.toFixed(2)}</span>
@@ -321,6 +436,11 @@ export function InstrumentPage() {
           </div>
         ) : null}
       </section>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Quote snapshot card                                                 */}
+      {/* ------------------------------------------------------------------ */}
+      <QuoteSummaryCard quote={quote} loading={quoteLoading} error={quoteError} />
 
       {/* ------------------------------------------------------------------ */}
       {/* Controls                                                            */}
@@ -427,6 +547,49 @@ export function InstrumentPage() {
             >
               {calcLoading ? "Recalculating…" : "Recalculate indicators"}
             </button>
+          ) : null}
+        </div>
+      </section>
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Auto-refresh controls                                               */}
+      {/* ------------------------------------------------------------------ */}
+      <section className="workspace-controls auto-refresh-controls">
+        <div className="control-group">
+          <label htmlFor="auto-refresh-select">Auto-refresh</label>
+          <select
+            id="auto-refresh-select"
+            value={autoRefreshInterval}
+            onChange={(e) => setAutoRefreshInterval(e.target.value as RefreshInterval)}
+          >
+            <option value="off">Off</option>
+            <option value="15">15 sec</option>
+            <option value="30">30 sec</option>
+            <option value="60">60 sec</option>
+          </select>
+        </div>
+
+        {autoRefreshInterval !== "off" ? (
+          <div className="control-group">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={alsoRefreshCandles}
+                onChange={(e) => setAlsoRefreshCandles(e.target.checked)}
+              />
+              {" "}Also refresh candles
+            </label>
+          </div>
+        ) : null}
+
+        <div className="control-group refresh-status">
+          <span className="refresh-stat">
+            Quote refreshed: <strong>{formatTime(lastQuoteRefreshTime)}</strong>
+          </span>
+          {lastCandleSyncTime !== null ? (
+            <span className="refresh-stat">
+              Candles synced: <strong>{formatTime(lastCandleSyncTime)}</strong>
+            </span>
           ) : null}
         </div>
       </section>

@@ -1,0 +1,21 @@
+export type QuoteSnapshot = {
+  ticker: string;
+  engine: string;
+  market: string;
+  board: string;
+  last_price: number | null;
+  bid: number | null;
+  ask: number | null;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  previous_close: number | null;
+  change: number | null;
+  change_percent: number | null;
+  volume: number | null;
+  value: number | null;
+  trade_time: string | null;
+  server_time: string | null;
+  source: string;
+};

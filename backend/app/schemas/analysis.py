@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 SignalDirection = Literal["buy", "sell", "neutral", "caution", "info"]
 SignalStrength = Literal["weak", "medium", "strong", "info"]
-AggregateSignal = Literal["strong_buy", "buy", "neutral", "sell", "strong_sell", "caution"]
+AggregateSignal = Literal["strong_buy", "buy", "neutral", "sell", "strong_sell", "caution", "no_data"]
 Confidence = Literal["low", "medium", "high"]
 
 
@@ -38,3 +38,4 @@ class TechnicalSignalResponse(BaseModel):
     timeframe: str
     aggregate: TechnicalSignalAggregate
     signals: list[TechnicalSignalItem]
+    message: str | None = None

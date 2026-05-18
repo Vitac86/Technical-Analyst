@@ -357,6 +357,42 @@ class MoexProvider(MarketDataProvider):
 
         return candles
 
+    async def fetch_quote(
+        self,
+        ticker: str,
+        engine: str = MOEX_ENGINE,
+        market: str = MOEX_MARKET,
+        board: str = MOEX_SHARES_BOARD,
+    ) -> dict[str, Any]:
+        """Fetch a current market snapshot for one instrument from MOEX ISS.
+
+        Returns a normalized dict matching QuoteSnapshot fields.  All price
+        fields may be None when the market is closed or the instrument is not
+        found — the caller should not crash on null fields.
+        """
+        normalised_ticker = ticker.strip().upper()
+        async with self._client_context() as client:
+            payload = await self._get_json(
+                client,
+                f"/engines/{engine}/markets/{market}/boards/{board}/securities/{normalised_ticker}.json",
+                params={
+                    "iss.meta": "off",
+                    "iss.only": "securities,marketdata",
+                    "securities.columns": "SECID,BOARDID,PREVPRICE,PREVDATE",
+                    "marketdata.columns": (
+                        "SECID,BOARDID,LAST,BID,OFFER,OPEN,HIGH,LOW,CLOSE,"
+                        "LASTTOPREVPRICE,VOLTODAY,VALTODAY,UPDATETIME,SYSTIME"
+                    ),
+                },
+            )
+        return normalize_quote_rows(
+            payload,
+            ticker=normalised_ticker,
+            engine=engine,
+            market=market,
+            board=board,
+        )
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -542,3 +578,72 @@ def _int_or_none(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def normalize_quote_rows(
+    payload: dict[str, Any],
+    ticker: str,
+    engine: str,
+    market: str,
+    board: str,
+) -> dict[str, Any]:
+    """Normalize MOEX ISS securities + marketdata tables into a quote snapshot dict."""
+    normalised_ticker = ticker.strip().upper()
+
+    sec_rows = extract_table_rows(payload, "securities")
+    md_rows = extract_table_rows(payload, "marketdata")
+
+    sec_row: dict[str, Any] = {}
+    for r in sec_rows:
+        if _upper_string(r.get("SECID")) == normalised_ticker:
+            sec_row = r
+            break
+    if not sec_row and sec_rows:
+        sec_row = sec_rows[0]
+
+    md_row: dict[str, Any] = {}
+    for r in md_rows:
+        if _upper_string(r.get("SECID")) == normalised_ticker:
+            md_row = r
+            break
+    if not md_row and md_rows:
+        md_row = md_rows[0]
+
+    last_price = _float_or_none(md_row.get("LAST"))
+    previous_close = _float_or_none(sec_row.get("PREVPRICE"))
+    change_percent = _float_or_none(md_row.get("LASTTOPREVPRICE"))
+
+    change: float | None = None
+    if last_price is not None and previous_close is not None:
+        change = round(last_price - previous_close, 6)
+
+    return {
+        "ticker": normalised_ticker,
+        "engine": engine,
+        "market": market,
+        "board": board,
+        "last_price": last_price,
+        "bid": _float_or_none(md_row.get("BID")),
+        "ask": _float_or_none(md_row.get("OFFER")),
+        "open": _float_or_none(md_row.get("OPEN")),
+        "high": _float_or_none(md_row.get("HIGH")),
+        "low": _float_or_none(md_row.get("LOW")),
+        "close": _float_or_none(md_row.get("CLOSE")),
+        "previous_close": previous_close,
+        "change": change,
+        "change_percent": change_percent,
+        "volume": _float_or_none(md_row.get("VOLTODAY")),
+        "value": _float_or_none(md_row.get("VALTODAY")),
+        "trade_time": _clean_string(md_row.get("UPDATETIME")),
+        "server_time": _clean_string(md_row.get("SYSTIME")),
+        "source": "moex",
+    }

@@ -24,6 +24,7 @@ const AGGREGATE_LABEL: Record<AggregateSignal, string> = {
   sell: "Sell",
   strong_sell: "Strong Sell",
   caution: "Caution",
+  no_data: "No Data",
 };
 
 // ---------------------------------------------------------------------------
@@ -103,6 +104,7 @@ type Props = {
 
 export function TechnicalSignalsPanel({ data, loading, error }: Props) {
   const empty = !loading && !error && data === null;
+  const noData = !loading && !error && data !== null && data.aggregate.signal === "no_data";
 
   return (
     <section className="panel ts-panel">
@@ -129,7 +131,13 @@ export function TechnicalSignalsPanel({ data, loading, error }: Props) {
         </div>
       ) : null}
 
-      {data && !loading && !error ? (
+      {noData ? (
+        <div className="chart-state">
+          {data?.message ?? "No technical signals yet. Load candles and calculate indicators first."}
+        </div>
+      ) : null}
+
+      {data && !loading && !error && !noData ? (
         <>
           {/* Aggregate header */}
           <div className="ts-aggregate">

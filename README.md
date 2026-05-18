@@ -315,9 +315,63 @@ security.
 
 ---
 
+## Current Quote Snapshot and Auto-refresh
+
+### Quote snapshot endpoint
+
+Returns a near-current market snapshot for one instrument directly from MOEX ISS
+without requiring a candle sync.
+
+```
+GET http://127.0.0.1:8001/api/v1/quotes/moex?ticker=SBER&engine=stock&market=shares&board=TQBR
+```
+
+PowerShell:
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8001/api/v1/quotes/moex?ticker=SBER&engine=stock&market=shares&board=TQBR"
+Invoke-RestMethod "http://127.0.0.1:8001/api/v1/quotes/moex?ticker=USD000UTSTOM&engine=currency&market=selt&board=CETS"
+```
+
+Response fields: `ticker`, `engine`, `market`, `board`, `last_price`, `bid`, `ask`,
+`open`, `high`, `low`, `close`, `previous_close`, `change`, `change_percent`,
+`volume`, `value`, `trade_time`, `server_time`, `source`.
+
+All price fields are `null` when the market is closed or data is unavailable —
+this is a normal 200 response.  A 503 is returned only when MOEX ISS itself is unreachable.
+
+### How quote refresh differs from candle sync
+
+| Behaviour | Quote refresh | Candle sync |
+|-----------|--------------|-------------|
+| Writes to SQLite | No | Yes |
+| Fetches history | No | Yes |
+| Network call | Yes (MOEX ISS marketdata) | Yes (MOEX ISS candles) |
+| This is real streaming | No — polling | No — polling |
+
+The quote card displays near-current data by polling the MOEX ISS on demand.
+It does **not** update the chart, indicators, or signals — those still require a
+candle sync via **Load / update data**.
+
+### Auto-refresh (UI)
+
+The chart page has an **Auto-refresh** selector (Off / 15 sec / 30 sec / 60 sec).
+
+- **Quote only** (default): calls the quote endpoint every N seconds.
+  Candles, indicators, and signals are not touched.
+- **Also refresh candles** checkbox: when checked, a full workspace load runs on
+  each tick — candles, indicators, and signals are all updated and written to SQLite.
+  Overlapping requests are guarded; if the previous tick is still running the new
+  tick is skipped.
+
+Status lines below the controls show **last quote refresh time** and (if enabled)
+**last candle sync time**.
+
+---
+
 ## Known limitations
 
-- **Real-time quotes**: Not supported. Last price is computed from the last stored candle.
+- **Real-time quotes**: Not supported. The quote snapshot endpoint polls MOEX ISS on demand but is not a streaming feed. Last price in the candle panel is still computed from the last stored candle.
 - **5m/15m depth**: MOEX returns 1m data for approximately the last 30 days. Requesting a
   range older than that will return fewer candles or none.
 - **4h alignment**: 4h buckets are aligned to midnight UTC. Russian market hours may

@@ -6,6 +6,7 @@ from app.api.v1.endpoints import (
     health,
     indicators,
     instruments,
+    quotes,
     sync,
     workspace,
 )
@@ -19,3 +20,4 @@ api_router.include_router(indicators.router, prefix="/indicators", tags=["indica
 api_router.include_router(analysis.router, prefix="/analysis", tags=["analysis"])
 api_router.include_router(sync.router, prefix="/sync", tags=["sync"])
 api_router.include_router(workspace.router, prefix="/workspace", tags=["workspace"])
+api_router.include_router(quotes.router, prefix="/quotes", tags=["quotes"])

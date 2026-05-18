@@ -24,6 +24,7 @@ from app.services.analysis.signal_engine import (
     _evaluate_rsi,
     _evaluate_sma,
     _aggregate_signals,
+    generate_technical_signals,
 )
 
 
@@ -538,3 +539,56 @@ def test_technical_signals_endpoint_returns_expected_shape(
     assert "signal" in agg
     assert "confidence" in agg
     assert "generated_at" in agg
+
+
+# ---------------------------------------------------------------------------
+# No-candle edge case tests
+# ---------------------------------------------------------------------------
+
+
+def test_no_candle_returns_no_data_signal(db_session: Session) -> None:
+    """generate_technical_signals returns no_data when no candle exists."""
+    instrument = _insert_instrument(db_session)
+    db_session.commit()
+
+    result = generate_technical_signals(db_session, instrument_id=instrument.id, timeframe="1d")
+
+    assert result.aggregate.signal == "no_data"
+    assert result.aggregate.confidence == "low"
+    assert result.signals == []
+    assert result.message is not None
+    assert "candle" in result.message.lower()
+
+
+def test_no_candle_does_not_fabricate_close_zero(db_session: Session) -> None:
+    """No indicator evaluation should run when candle is absent (close=0.0 bug)."""
+    instrument = _insert_instrument(db_session)
+    _insert_indicator(db_session, instrument.id, "sma_20", "trend", {"value": 100.0})
+    _insert_indicator(db_session, instrument.id, "bollinger_bands_20_2", "trend", {
+        "upper": 110.0, "middle": 100.0, "lower": 90.0, "percent_b": 0.5,
+    })
+    db_session.commit()
+
+    result = generate_technical_signals(db_session, instrument_id=instrument.id, timeframe="1d")
+
+    assert result.aggregate.signal == "no_data"
+    assert result.signals == []
+
+
+def test_no_candle_endpoint_returns_no_data(
+    test_client: TestClient,
+    db_session: Session,
+) -> None:
+    """HTTP endpoint returns no_data aggregate when no candle exists for instrument."""
+    instrument = _insert_instrument(db_session)
+    db_session.commit()
+
+    response = test_client.get(
+        f"/api/v1/analysis/technical-signals?instrument_id={instrument.id}&timeframe=1d"
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["aggregate"]["signal"] == "no_data"
+    assert data["signals"] == []
+    assert data["message"] is not None

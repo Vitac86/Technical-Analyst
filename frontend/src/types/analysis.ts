@@ -6,7 +6,8 @@ export type AggregateSignal =
   | "neutral"
   | "sell"
   | "strong_sell"
-  | "caution";
+  | "caution"
+  | "no_data";
 export type Confidence = "low" | "medium" | "high";
 
 export type TechnicalSignalItem = {
@@ -38,4 +39,5 @@ export type TechnicalSignalResponse = {
   timeframe: string;
   aggregate: TechnicalSignalAggregate;
   signals: TechnicalSignalItem[];
+  message?: string | null;
 };
