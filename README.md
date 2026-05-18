@@ -31,6 +31,50 @@ Instruments are identified by a **source tuple**: `engine / market / board / tic
 A full-market instrument sync is **not required** for normal use.  Search and
 single-instrument load work without it.
 
+## One-command Windows launch
+
+### Start
+
+```powershell
+.\scripts\start_app.ps1
+```
+
+Or double-click **`scripts\start_app.bat`**.
+
+The script:
+- stops any stale listeners on ports 8001 and 5173
+- starts the backend (FastAPI/uvicorn) on **port 8001** — no `--reload`
+- starts the frontend (Vite dev server) on **port 5173**
+- waits for both to be healthy
+- opens the browser at **`http://127.0.0.1:5173/chart`**
+- writes logs to `logs\backend.log` and `logs\frontend.log`
+
+### Stop
+
+```powershell
+.\scripts\stop_app.ps1
+```
+
+Or double-click **`scripts\stop_app.bat`**.
+
+### Restart
+
+```powershell
+.\scripts\restart_app.ps1
+```
+
+Or double-click **`scripts\restart_app.bat`**.
+
+### Notes
+
+- Backend default port: **8001**
+- Frontend default port: **5173**
+- Normal launch does **not** use `uvicorn --reload`
+- Logs: `logs\backend.log` (uvicorn stderr) and `logs\frontend.log` (Vite stdout)
+- The `logs\` directory is created automatically and is git-ignored
+
+---
+
 ## Quick start — using the chart UI (no command line)
 
 1. Start the backend (once):
