@@ -3,9 +3,9 @@ export type Candle = {
   instrument_id: number;
   timeframe: string;
   timestamp: string;
-  open: string;
-  high: string;
-  low: string;
-  close: string;
-  volume: string | null;
+  open: number | string;
+  high: number | string;
+  low: number | string;
+  close: number | string;
+  volume: number | string | null;
 };

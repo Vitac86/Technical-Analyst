@@ -9,6 +9,7 @@ export default function App() {
     <AppLayout>
       <Routes>
         <Route path="/" element={<DashboardPage />} />
+        <Route path="/chart" element={<InstrumentPage />} />
         <Route path="/instruments/:ticker" element={<InstrumentPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

@@ -12,9 +12,62 @@ features on top of stored candles.
 - Database: SQLite
 - Data processing: pandas, numpy
 - Frontend: React, TypeScript, Vite
+- Charts: TradingView Lightweight Charts
 - API: REST under `/api/v1`
 - First market data source: MOEX ISS
 - Future optional provider boundary: TradingView
+
+## Quick Start: SBER Chart
+
+Run the backend from `backend/`:
+
+```powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
+python -m alembic upgrade head
+python -m uvicorn app.main:app --reload
+```
+
+In a second terminal, sync instruments and SBER daily candles from `backend/`:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe -m app.tasks.sync_market_data instruments
+.\.venv\Scripts\python.exe -m app.tasks.sync_market_data candles --ticker SBER --timeframe 1d --start 2024-01-01 --end 2024-06-01
+```
+
+Find the SBER instrument id:
+
+```powershell
+Invoke-RestMethod http://localhost:8000/api/v1/instruments |
+  Where-Object { $_.ticker -eq "SBER" }
+```
+
+Calculate the default indicators for that id:
+
+```powershell
+cd backend
+$sber = Invoke-RestMethod http://localhost:8000/api/v1/instruments |
+  Where-Object { $_.ticker -eq "SBER" }
+.\.venv\Scripts\python.exe -m app.tasks.calculate_indicators defaults --instrument-id $sber.id --timeframe 1d
+```
+
+Run the frontend from `frontend/`:
+
+```powershell
+cd frontend
+npm.cmd install
+npm.cmd run dev
+```
+
+Open the chart page:
+
+```text
+http://localhost:5173/chart
+```
+
+The Vite dev server proxies `/api` to `http://localhost:8000`, so the backend
+should be running while the chart page is open.
 
 ## Backend Setup
 
@@ -143,6 +196,7 @@ npm.cmd run dev
 ```
 
 Open the Vite URL shown in the terminal, usually `http://localhost:5173`.
+The first chart screen is available at `http://localhost:5173/chart`.
 
 Build check:
 
