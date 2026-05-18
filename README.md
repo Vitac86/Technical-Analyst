@@ -2,9 +2,9 @@
 
 Local browser-based technical analysis workspace for personal trading research.
 
-The project is intentionally small at this stage: it provides the backend,
-frontend, database, provider, indicator, and analysis skeletons that later work
-can extend.
+The project is intentionally small at this stage: FastAPI, SQLite, Alembic, and
+React/Vite provide the base for loading MOEX market data and building analysis
+features on top of stored candles.
 
 ## Stack
 
@@ -13,7 +13,7 @@ can extend.
 - Data processing: pandas, numpy
 - Frontend: React, TypeScript, Vite
 - API: REST under `/api/v1`
-- First planned market data source: MOEX ISS
+- First market data source: MOEX ISS
 - Future optional provider boundary: TradingView
 
 ## Backend Setup
@@ -25,7 +25,8 @@ python -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 copy .env.example .env
-uvicorn app.main:app --reload
+python -m alembic upgrade head
+python -m uvicorn app.main:app --reload
 ```
 
 Health check:
@@ -38,24 +39,7 @@ Run backend tests:
 
 ```powershell
 cd "C:\Users\Виталий\Desktop\PythonProjects\Tecnical Analyst\backend"
-pytest
-```
-
-## Frontend Setup
-
-```powershell
-cd "C:\Users\Виталий\Desktop\PythonProjects\Tecnical Analyst\frontend"
-npm install
-npm run dev
-```
-
-Open the Vite URL shown in the terminal, usually `http://localhost:5173`.
-If PowerShell blocks `npm.ps1`, use `npm.cmd install` and `npm.cmd run dev`.
-
-Build check:
-
-```powershell
-npm run build
+.\.venv\Scripts\python.exe -m pytest
 ```
 
 ## Database
@@ -66,15 +50,58 @@ The default SQLite URL is:
 sqlite:///./technical_analyst.db
 ```
 
-Alembic is configured in `backend/alembic.ini`. The initial migration is not
-created yet; the next backend step should generate it from the SQLAlchemy
-models.
+Run migrations from `backend/`:
 
-## Next Steps
+```powershell
+cd "C:\Users\Виталий\Desktop\PythonProjects\Tecnical Analyst\backend"
+.\.venv\Scripts\python.exe -m alembic upgrade head
+```
 
-- Generate the initial Alembic migration.
-- Implement MOEX ISS instrument and candle syncing.
-- Add repository create/upsert methods for synced data.
-- Implement core indicator formulas and persistence.
-- Connect frontend dashboard data to live API responses.
-- Add charting once candle data exists.
+## MOEX Sync
+
+Sync MOEX TQBR share instruments:
+
+```powershell
+cd "C:\Users\Виталий\Desktop\PythonProjects\Tecnical Analyst\backend"
+.\.venv\Scripts\python.exe -m app.tasks.sync_market_data instruments
+```
+
+Sync SBER daily candles:
+
+```powershell
+cd "C:\Users\Виталий\Desktop\PythonProjects\Tecnical Analyst\backend"
+.\.venv\Scripts\python.exe -m app.tasks.sync_market_data candles --ticker SBER --timeframe 1d --start 2024-01-01 --end 2024-03-01
+```
+
+API sync examples while the backend is running:
+
+```powershell
+Invoke-RestMethod -Method Post http://localhost:8000/api/v1/sync/moex/instruments
+Invoke-RestMethod -Method Post "http://localhost:8000/api/v1/sync/moex/candles?ticker=SBER&timeframe=1d&start=2024-01-01&end=2024-03-01"
+```
+
+Inspect stored data:
+
+```powershell
+Invoke-RestMethod http://localhost:8000/api/v1/instruments
+Invoke-RestMethod "http://localhost:8000/api/v1/candles?instrument_id=1&timeframe=1d"
+```
+
+Supported MOEX candle timeframes: `1m`, `10m`, `1h`, `1d`, `1w`, `1mo`.
+
+## Frontend Setup
+
+```powershell
+cd "C:\Users\Виталий\Desktop\PythonProjects\Tecnical Analyst\frontend"
+npm.cmd install
+npm.cmd run dev
+```
+
+Open the Vite URL shown in the terminal, usually `http://localhost:5173`.
+
+Build check:
+
+```powershell
+cd "C:\Users\Виталий\Desktop\PythonProjects\Tecnical Analyst\frontend"
+npm.cmd run build
+```
