@@ -21,3 +21,10 @@ class IndicatorValueRead(IndicatorValueBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+
+
+class IndicatorCalculationRequest(BaseModel):
+    instrument_id: int
+    timeframe: str = "1d"
+    indicator_name: str
+    params: dict[str, Any] | None = None

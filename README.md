@@ -89,6 +89,51 @@ Invoke-RestMethod "http://localhost:8000/api/v1/candles?instrument_id=1&timefram
 
 Supported MOEX candle timeframes: `1m`, `10m`, `1h`, `1d`, `1w`, `1mo`.
 
+## Indicator Calculation
+
+After syncing candles, calculate the default indicator set from `backend/`:
+
+```powershell
+cd backend
+python -m alembic upgrade head
+python -m app.tasks.sync_market_data instruments
+python -m app.tasks.sync_market_data candles --ticker SBER --timeframe 1d --start 2024-01-01 --end 2024-06-01
+python -m app.tasks.calculate_indicators defaults --instrument-id 1 --timeframe 1d
+```
+
+Calculate one indicator with custom parameters:
+
+```powershell
+python -m app.tasks.calculate_indicators one --instrument-id 1 --timeframe 1d --indicator rsi --window 14
+python -m app.tasks.calculate_indicators one --instrument-id 1 --timeframe 1d --indicator sma --window 50
+```
+
+Stored indicator names use stable parameter suffixes:
+
+```text
+sma_20
+ema_20
+rsi_14
+macd_12_26_9
+bollinger_bands_20_2
+atr_14
+```
+
+API examples while the backend is running:
+
+```powershell
+Invoke-RestMethod -Method Post "http://localhost:8000/api/v1/indicators/calculate-defaults?instrument_id=1&timeframe=1d"
+Invoke-RestMethod -Method Post "http://localhost:8000/api/v1/indicators/calculate?instrument_id=1&timeframe=1d&indicator_name=rsi_14"
+Invoke-RestMethod -Method Post -ContentType "application/json" -Body '{"instrument_id":1,"timeframe":"1d","indicator_name":"macd","params":{"fast_period":12,"slow_period":26,"signal_period":9}}' http://localhost:8000/api/v1/indicators/calculate
+```
+
+Inspect stored indicator values:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/api/v1/indicators?instrument_id=1&indicator_name=rsi_14"
+sqlite3 technical_analyst.db "select indicator_name, timeframe, timestamp, values from indicator_values order by timestamp limit 5;"
+```
+
 ## Frontend Setup
 
 ```powershell

@@ -35,3 +35,12 @@ def get_indicator(name: str) -> IndicatorFunction | None:
         if normalized_name in category:
             return category[normalized_name]
     return None
+
+
+def get_indicator_category(name: str) -> str | None:
+    """Return an indicator category by registry key."""
+    normalized_name = name.lower()
+    for category_name, category in INDICATOR_REGISTRY.items():
+        if normalized_name in category:
+            return category_name
+    return None
