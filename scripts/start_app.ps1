@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 <#
-.SYNOPSIS  Start Technical Analyst: backend 8001, frontend 5173, browser at /chart.
+.SYNOPSIS  Start Technical Analyst: backend 8001, frontend 5173, browser at /scanner.
 #>
 $ErrorActionPreference = 'Continue'
 
@@ -40,7 +40,7 @@ Write-Host ""
 Write-Host "=== Technical Analyst - Starting ===" -ForegroundColor Cyan
 Write-Host "  Backend  : $BackendUrl"
 Write-Host "  Frontend : $FrontendUrl"
-Write-Host "  Chart    : $FrontendUrl/chart"
+Write-Host "  Scanner  : $FrontendUrl/scanner"
 Write-Host ""
 
 # --- Guard: python venv must exist -------------------------------------------
@@ -162,9 +162,9 @@ Write-Host "  Frontend ready." -ForegroundColor Green
 
 # --- Open browser ------------------------------------------------------------
 Write-Host ""
-$chartUrl = "$FrontendUrl/chart"
-Write-Host "Opening browser at $chartUrl ..." -ForegroundColor Yellow
-Start-Process $chartUrl
+$scannerUrl = "$FrontendUrl/scanner"
+Write-Host "Opening browser at $scannerUrl ..." -ForegroundColor Yellow
+Start-Process $scannerUrl
 Write-Host "  Browser opened." -ForegroundColor Green
 
 # --- Summary -----------------------------------------------------------------
@@ -172,7 +172,7 @@ Write-Host ""
 Write-Host "=== App running - OK ===" -ForegroundColor Cyan
 Write-Host "  Backend  : $BackendUrl    (PID $($backendProc.Id))"
 Write-Host "  Frontend : $FrontendUrl   (PID $($frontendProc.Id))"
-Write-Host "  Chart    : $chartUrl"
+Write-Host "  Scanner  : $scannerUrl"
 Write-Host ""
 Write-Host "Logs:"
 Write-Host "  $backendLog"

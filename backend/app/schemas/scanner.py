@@ -47,6 +47,7 @@ class ScannerRow(BaseModel):
     distance_to_resistance_percent: float | None = None
     summary: str | None = None
     error: str | None = None
+    last_timestamp: datetime | None = None
 
 
 class ScannerResponse(BaseModel):

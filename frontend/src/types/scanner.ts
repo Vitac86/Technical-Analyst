@@ -39,6 +39,7 @@ export interface ScannerRow {
   distance_to_resistance_percent: number | null;
   summary: string | null;
   error: string | null;
+  last_timestamp: string | null;
 }
 
 export interface ScannerResponse {

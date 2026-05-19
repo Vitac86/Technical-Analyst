@@ -1018,6 +1018,190 @@ a {
   line-height: 1.5;
 }
 
+/* Auto-mode controls */
+.scanner-auto-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.scanner-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #c7d0dc;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.scanner-checkbox-label input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: #3b82f6;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.scanner-checkbox-label input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Status bar */
+.scanner-status-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  padding: 8px 0;
+  border-top: 1px solid #2a3038;
+  border-bottom: 1px solid #2a3038;
+}
+
+.scanner-mode-chip {
+  border: 1px solid #2a3875;
+  border-radius: 4px;
+  background: #141c30;
+  padding: 2px 8px;
+  color: #a9d8ff;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.scanner-status-item {
+  color: #5a6878;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.scanner-hint {
+  margin: 0;
+  color: #4a5a6a;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.scanner-hint code {
+  background: #1e2530;
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 11px;
+  color: #97a3b3;
+}
+
+.scanner-date-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.date-input {
+  border: 1px solid #344050;
+  border-radius: 6px;
+  background: #151922;
+  color: #f0f4f8;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 10px;
+  width: 130px;
+}
+
+.date-input:disabled {
+  opacity: 0.5;
+}
+
+.scanner-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Load results panel */
+.scanner-load-panel {
+  border: 1px solid #2a3038;
+  border-radius: 8px;
+  background: #171b22;
+  overflow: hidden;
+}
+
+.scanner-load-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #2a3038;
+  background: #1a1f28;
+}
+
+.scanner-load-progress {
+  color: #f2c94c;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.scanner-load-done {
+  color: #97a3b3;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.scanner-load-list {
+  display: grid;
+}
+
+.scanner-load-row {
+  display: grid;
+  grid-template-columns: 90px 70px 1fr;
+  gap: 10px;
+  align-items: center;
+  padding: 7px 14px;
+  border-bottom: 1px solid #1e2530;
+  font-size: 12px;
+}
+
+.scanner-load-row:last-child {
+  border-bottom: none;
+}
+
+.scanner-load-ticker {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-weight: 700;
+  color: #e7ecf2;
+}
+
+.scanner-load-status {
+  font-weight: 700;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.scanner-load-message {
+  color: #5a6878;
+  font-size: 11px;
+}
+
+.scanner-load-row-success .scanner-load-status {
+  color: #6fcf97;
+}
+
+.scanner-load-row-failed .scanner-load-status {
+  color: #eb5757;
+}
+
+.scanner-load-row-failed .scanner-load-message {
+  color: #c07070;
+}
+
+.scanner-load-row-pending .scanner-load-status {
+  color: #f2c94c;
+}
+
 @media (max-width: 960px) {
   .dashboard-grid,
   .indicator-panels {

@@ -24,6 +24,18 @@ def _candle_count(db: Session, instrument_id: int, timeframe: str) -> int:
     return db.execute(stmt).scalar_one()
 
 
+def _latest_candle_timestamp(
+    db: Session, instrument_id: int, timeframe: str
+) -> datetime | None:
+    stmt = (
+        select(Candle.timestamp)
+        .where(Candle.instrument_id == instrument_id, Candle.timeframe == timeframe)
+        .order_by(Candle.timestamp.desc())
+        .limit(1)
+    )
+    return db.execute(stmt).scalar_one_or_none()
+
+
 def _extract_rsi(signals: list) -> float | None:
     for s in signals:
         if s.indicator_name == "rsi_14" and s.value is not None:
@@ -86,6 +98,8 @@ def _scan_one(
             status="no_candles",
         )
 
+    latest_ts = _latest_candle_timestamp(db, instrument.id, timeframe)
+
     sig_resp = generate_technical_signals(db, instrument_id=instrument.id, timeframe=timeframe)
     lvl_resp = generate_technical_levels(
         db, instrument_id=instrument.id, timeframe=timeframe, lookback=lookback
@@ -104,6 +118,7 @@ def _scan_one(
             timeframe=timeframe,
             status="no_indicators",
             last_close=lvl_resp.last_close,
+            last_timestamp=latest_ts,
         )
 
     rsi = _extract_rsi(sig_resp.signals)
@@ -151,6 +166,7 @@ def _scan_one(
         distance_to_support_percent=dist_support,
         distance_to_resistance_percent=dist_resistance,
         summary=lvl_resp.summary if lvl_resp.summary != "No data available." else None,
+        last_timestamp=latest_ts,
     )
 
 
