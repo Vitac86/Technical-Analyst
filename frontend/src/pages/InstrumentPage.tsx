@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { IndicatorPanel } from "../components/charts/IndicatorPanel";
-import { PriceChart } from "../components/charts/PriceChart";
+import { PriceChart, type ChartOverlays } from "../components/charts/PriceChart";
 import { TechnicalSignalsPanel } from "../components/analysis/TechnicalSignalsPanel";
 import { TechnicalLevelsPanel } from "../components/analysis/TechnicalLevelsPanel";
 import { QuoteSummaryCard } from "../components/quotes/QuoteSummaryCard";
@@ -102,7 +102,6 @@ function candleRefreshMs(tf: Timeframe): number {
   return map[tf];
 }
 
-
 function createEmptyIndicators(): IndicatorMap {
   return {
     sma_20: [],
@@ -158,6 +157,12 @@ function initQuoteRefreshSeconds(): number | null {
   return isNaN(n) ? 15 : n;
 }
 
+function initBool(key: string, defaultVal = true): boolean {
+  const v = lsGet(key);
+  if (v === null) return defaultVal;
+  return v !== "false";
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -175,8 +180,15 @@ export function InstrumentPage() {
     initQuoteRefreshSeconds,
   );
   const [candleRefreshEnabled, setCandleRefreshEnabled] = useState<boolean>(
-    () => lsGet("candleRefreshEnabled") !== "false",
+    () => initBool("candleRefreshEnabled"),
   );
+
+  // ── Overlay toggles (persisted to localStorage) ─────────────────────────
+  const [showSma,       setShowSma]       = useState(() => initBool("showSma"));
+  const [showEma,       setShowEma]       = useState(() => initBool("showEma"));
+  const [showBollinger, setShowBollinger] = useState(() => initBool("showBollinger"));
+  const [showLevels,    setShowLevels]    = useState(() => initBool("showLevels"));
+  const [showVolume,    setShowVolume]    = useState(() => initBool("showVolume"));
 
   // ── Search ───────────────────────────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState(source.ticker);
@@ -272,7 +284,6 @@ export function InstrumentPage() {
     }
   }
 
-  // Main workspace load — all optional params fall back to current refs
   async function doWorkspaceLoad(
     src?: InstrumentSource,
     tf?: Timeframe,
@@ -324,7 +335,7 @@ export function InstrumentPage() {
       const msg = errorMessage(err, "Failed to load workspace data.");
       setLoadError(
         msg.toLowerCase().includes("no candle") || msg.toLowerCase().includes("no data")
-          ? "No candles returned for this timeframe/date range. Try a more recent range."
+          ? "No candles for this timeframe/date range. Try a more recent range."
           : msg,
       );
     } finally {
@@ -335,21 +346,14 @@ export function InstrumentPage() {
 
   // ── Effects ──────────────────────────────────────────────────────────────
 
-  // Initial auto-load — once, StrictMode-safe
   useEffect(() => {
     if (initDoneRef.current) return;
     initDoneRef.current = true;
-
     void fetchQuote(sourceRef.current);
-
-    if (autoModeRef.current) {
-      // candles are empty on page open → always stale → trigger load
-      void doWorkspaceLoad();
-    }
+    if (autoModeRef.current) void doWorkspaceLoad();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Route ticker change (navigating to /instruments/:ticker after mount)
   useEffect(() => {
     if (!routeTicker || !initDoneRef.current) return;
     const upper = routeTicker.toUpperCase();
@@ -362,7 +366,6 @@ export function InstrumentPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeTicker]);
 
-  // Close search dropdown on outside click
   useEffect(() => {
     function onDown(e: MouseEvent) {
       if (searchBoxRef.current && !searchBoxRef.current.contains(e.target as Node)) {
@@ -373,7 +376,6 @@ export function InstrumentPage() {
     return () => document.removeEventListener("mousedown", onDown);
   }, []);
 
-  // Quote refresh polling
   useEffect(() => {
     if (!autoMode || quoteRefreshSeconds === null) return;
     const ms = quoteRefreshSeconds * 1000;
@@ -385,7 +387,6 @@ export function InstrumentPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoMode, quoteRefreshSeconds]);
 
-  // Candle refresh polling (throttled by timeframe; workspace endpoint guards MOEX staleness)
   useEffect(() => {
     if (!autoMode || !candleRefreshEnabled) return;
     const ms = candleRefreshMs(timeframe);
@@ -397,7 +398,6 @@ export function InstrumentPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoMode, candleRefreshEnabled, timeframe, startDate, endDate]);
 
-  // Reload signals/levels when timeframe or instrument changes
   useEffect(() => {
     if (lastWorkspace?.instrument.id != null) {
       void reloadSignals(lastWorkspace.instrument.id, timeframe);
@@ -423,6 +423,13 @@ export function InstrumentPage() {
   useEffect(() => {
     lsSet("candleRefreshEnabled", candleRefreshEnabled ? "true" : "false");
   }, [candleRefreshEnabled]);
+
+  // ── Persist overlay settings ─────────────────────────────────────────────
+  useEffect(() => { lsSet("showSma",       showSma       ? "true" : "false"); }, [showSma]);
+  useEffect(() => { lsSet("showEma",       showEma       ? "true" : "false"); }, [showEma]);
+  useEffect(() => { lsSet("showBollinger", showBollinger ? "true" : "false"); }, [showBollinger]);
+  useEffect(() => { lsSet("showLevels",    showLevels    ? "true" : "false"); }, [showLevels]);
+  useEffect(() => { lsSet("showVolume",    showVolume    ? "true" : "false"); }, [showVolume]);
 
   // ── Debounced instrument search ──────────────────────────────────────────
   const triggerSearch = useCallback((q: string) => {
@@ -476,6 +483,16 @@ export function InstrumentPage() {
     void doWorkspaceLoad();
   }
 
+  function handleOverlayToggle(key: keyof ChartOverlays) {
+    switch (key) {
+      case "showSma":       setShowSma(v => !v);       break;
+      case "showEma":       setShowEma(v => !v);       break;
+      case "showBollinger": setShowBollinger(v => !v); break;
+      case "showLevels":    setShowLevels(v => !v);    break;
+      case "showVolume":    setShowVolume(v => !v);    break;
+    }
+  }
+
   // ── Derived display values ───────────────────────────────────────────────
   const instrument = lastWorkspace?.instrument ?? null;
   const displayPrice = quote?.last_price ?? lastPrice?.last_close ?? null;
@@ -483,6 +500,8 @@ export function InstrumentPage() {
   const displayChangePct = quote?.change_percent ?? lastPrice?.change_percent ?? null;
   const changePositive = (displayChange ?? 0) >= 0;
   const noData = candles.length === 0;
+
+  const overlays: ChartOverlays = { showSma, showEma, showBollinger, showLevels, showVolume };
 
   // ── Render ───────────────────────────────────────────────────────────────
 
@@ -503,6 +522,9 @@ export function InstrumentPage() {
               : [source.engine, source.market, source.board].join(" · ")}
           </span>
           <span className="instr-tf-badge">{timeframe}</span>
+          <span className={`auto-badge ${autoMode ? "auto-badge-on" : "auto-badge-off"}`}>
+            Auto {autoMode ? "ON" : "OFF"}
+          </span>
         </div>
 
         <div className="instr-price-block">
@@ -514,22 +536,12 @@ export function InstrumentPage() {
               </span>
             </>
           ) : null}
-          <div className="instr-times">
-            <span className="instr-time-item">Q {formatTime(lastQuoteTime)}</span>
-            {lastCandleSyncTime !== null ? (
-              <span className="instr-time-item">C {formatTime(lastCandleSyncTime)}</span>
-            ) : null}
-          </div>
         </div>
       </header>
 
-      {/* 2 ─ Quote summary grid */}
-      <QuoteSummaryCard quote={quote} loading={!quoteLoaded} error={quoteError} />
-
-      {/* 3 ─ Controls row */}
+      {/* 2 ─ Controls row */}
       <section className="chart-controls">
 
-        {/* Instrument search */}
         <div className="ctrl-group" ref={searchBoxRef}>
           <label className="ctrl-label">Instrument</label>
           <div className="search-wrapper">
@@ -562,7 +574,6 @@ export function InstrumentPage() {
           </div>
         </div>
 
-        {/* Selected source */}
         <div className="ctrl-group">
           <label className="ctrl-label">Source</label>
           <span className="instr-source-chip">
@@ -570,7 +581,6 @@ export function InstrumentPage() {
           </span>
         </div>
 
-        {/* Timeframe */}
         <div className="ctrl-group">
           <label className="ctrl-label">Timeframe</label>
           <div className="tf-selector">
@@ -587,7 +597,6 @@ export function InstrumentPage() {
           </div>
         </div>
 
-        {/* Date range */}
         <div className="ctrl-group">
           <label className="ctrl-label">From</label>
           <input
@@ -608,7 +617,6 @@ export function InstrumentPage() {
           />
         </div>
 
-        {/* Auto mode toggle */}
         <div className="ctrl-group">
           <label className="ctrl-label">Auto mode</label>
           <button
@@ -620,7 +628,6 @@ export function InstrumentPage() {
           </button>
         </div>
 
-        {/* Quote refresh interval */}
         <div className="ctrl-group">
           <label className="ctrl-label">Quote refresh</label>
           <select
@@ -640,7 +647,6 @@ export function InstrumentPage() {
           </select>
         </div>
 
-        {/* Candle refresh toggle */}
         <div className="ctrl-group ctrl-checkbox-group">
           <label className="ctrl-label">Candles</label>
           <label className="checkbox-label">
@@ -653,7 +659,6 @@ export function InstrumentPage() {
           </label>
         </div>
 
-        {/* Manual load */}
         <div className="ctrl-group ctrl-actions">
           <button
             type="button"
@@ -666,15 +671,20 @@ export function InstrumentPage() {
         </div>
       </section>
 
-      {/* 4 ─ Status bar */}
+      {/* 3 ─ Compact status bar */}
       <div className="chart-status-bar">
-        <span className={`auto-badge ${autoMode ? "auto-badge-on" : "auto-badge-off"}`}>
-          Auto {autoMode ? "ON" : "OFF"}
+        {isUpdating ? <span className="status-updating">● Updating…</span> : null}
+        <span className="status-item">
+          Quote: {quoteRefreshSeconds === null ? "Off" : `${quoteRefreshSeconds}s`}
         </span>
-        {isUpdating ? <span className="status-updating">Updating…</span> : null}
-        <span className="status-item">Quote {formatTime(lastQuoteTime)}</span>
+        <span className="status-item">
+          Candles: {candleRefreshEnabled ? "Auto" : "Off"}
+        </span>
+        {lastQuoteTime !== null ? (
+          <span className="status-item">Q {formatTime(lastQuoteTime)}</span>
+        ) : null}
         {lastCandleSyncTime !== null ? (
-          <span className="status-item">Candles {formatTime(lastCandleSyncTime)}</span>
+          <span className="status-item">C {formatTime(lastCandleSyncTime)}</span>
         ) : null}
         {candleCount > 0 ? (
           <span className="status-item">{candleCount} candles · {timeframe}</span>
@@ -684,7 +694,7 @@ export function InstrumentPage() {
         ) : null}
       </div>
 
-      {/* 5 ─ Price chart */}
+      {/* 4 ─ Price chart — higher on the page */}
       <PriceChart
         candles={candles}
         timeframe={timeframe}
@@ -694,9 +704,14 @@ export function InstrumentPage() {
           bollingerBands: indicators.bollinger_bands_20_2,
         }}
         levels={levels?.levels ?? []}
+        overlays={overlays}
+        onOverlayToggle={handleOverlayToggle}
         loading={isUpdating && noData}
         error={null}
       />
+
+      {/* 5 ─ Quote summary chips */}
+      <QuoteSummaryCard quote={quote} loading={!quoteLoaded} error={quoteError} />
 
       {/* 6 ─ Indicator panels */}
       <div className="indicator-panels">

@@ -76,7 +76,7 @@ a {
 .app-main {
   width: min(1280px, 100%);
   margin: 0 auto;
-  padding: 28px 32px 40px;
+  padding: 14px 32px 40px;
 }
 
 .dashboard-grid {
@@ -88,7 +88,7 @@ a {
 
 .instrument-page {
   display: grid;
-  gap: 18px;
+  gap: 12px;
 }
 
 .page-heading {
@@ -123,7 +123,7 @@ a {
 }
 
 .chart-panel {
-  min-height: 560px;
+  min-height: 0;
 }
 
 .panel-header {
@@ -131,7 +131,7 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 10px;
 }
 
 .panel-header h2 {
@@ -254,7 +254,7 @@ a {
 }
 
 .price-canvas {
-  height: 460px;
+  height: 560px;
 }
 
 .indicator-canvas {
@@ -1305,67 +1305,46 @@ a {
   border: 1px solid #2a3038;
   border-radius: 8px;
   background: #171b22;
-  padding: 12px 16px;
+  padding: 10px 14px;
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .quote-card-loading,
 .quote-card-unavailable {
   display: flex;
   align-items: center;
-  padding: 10px 16px;
+  padding: 8px 14px;
   color: #7a8ea3;
   font-size: 13px;
   font-weight: 600;
   border: 1px solid #2a3038;
   border-radius: 8px;
   background: #171b22;
-  min-height: 52px;
+  min-height: 46px;
 }
 
-.quote-card-main {
+/* compact chip row — replaces old grid+main+footer */
+.quote-chip-row {
   display: flex;
-  align-items: baseline;
-  gap: 10px;
   flex-wrap: wrap;
-}
-
-.quote-last-price {
-  font-size: 24px;
-  font-weight: 800;
-  color: #f0f4f8;
-  letter-spacing: -0.01em;
-}
-
-.quote-change {
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.quote-change-positive { color: #31b181; }
-.quote-change-negative { color: #eb5757; }
-
-.quote-no-price {
-  font-size: 14px;
-  color: #7a8ea3;
-  font-weight: 600;
-}
-
-.quote-card-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
   gap: 6px;
 }
 
-.quote-field {
+.quote-chip {
   display: flex;
   flex-direction: column;
   gap: 2px;
   background: #1b2028;
   border: 1px solid #2d3540;
   border-radius: 6px;
-  padding: 6px 10px;
+  padding: 5px 10px;
+  min-width: 72px;
+}
+
+.quote-chip-accent {
+  border-color: #344a60;
+  background: #192430;
 }
 
 .quote-label {
@@ -1380,29 +1359,28 @@ a {
   font-size: 13px;
   font-weight: 700;
   color: #e7ecf2;
+  white-space: nowrap;
 }
 
-.quote-card-footer {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  padding-top: 4px;
-  border-top: 1px solid #232b36;
-}
+.quote-value-pos { color: #31b181; }
+.quote-value-neg { color: #eb5757; }
 
-.quote-meta {
-  font-size: 11px;
-  color: #7a8ea3;
-  font-weight: 600;
+.quote-value-mono {
   font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 12px;
 }
 
-.quote-source {
+.quote-warn-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #5a3a10;
+  border-radius: 4px;
+  background: #1a1000;
+  color: #f2994a;
   font-size: 11px;
-  color: #7a8ea3;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  margin-left: auto;
+  font-weight: 700;
+  padding: 3px 8px;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1607,6 +1585,73 @@ a {
 }
 
 /* ------------------------------------------------------------------ */
+/* Overlay toggle buttons (in PriceChart panel header)                  */
+/* ------------------------------------------------------------------ */
+
+.chart-overlay-toggles {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.overlay-toggle {
+  cursor: pointer;
+  border: 1px solid #2d3540;
+  border-radius: 4px;
+  background: #13171d;
+  color: #4a5a6a;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 3px 8px;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+  white-space: nowrap;
+}
+
+.overlay-toggle:hover {
+  border-color: #3d4a5a;
+  color: #7a8ea3;
+}
+
+.overlay-toggle-active {
+  color: #e7ecf2;
+  border-color: #344050;
+  background: #1b2028;
+}
+
+.overlay-toggle-active.ot-sma {
+  color: #f2c94c;
+  border-color: #5a4a10;
+  background: #1c1800;
+}
+
+.overlay-toggle-active.ot-ema {
+  color: #56ccf2;
+  border-color: #1a4a5a;
+  background: #001828;
+}
+
+.overlay-toggle-active.ot-bollinger {
+  color: #b8a7ff;
+  border-color: #3a2a6a;
+  background: #12082a;
+}
+
+.overlay-toggle-active.ot-levels {
+  color: #f2994a;
+  border-color: #5a3a10;
+  background: #1a1000;
+}
+
+.overlay-toggle-active.ot-volume {
+  color: #31b181;
+  border-color: #1a4a30;
+  background: #001a10;
+}
+
+/* ------------------------------------------------------------------ */
 /* Analysis panels — 2-column on desktop (Chart Workspace v2)          */
 /* ------------------------------------------------------------------ */
 
@@ -1669,11 +1714,11 @@ a {
   }
 
   .chart-panel {
-    min-height: 430px;
+    min-height: 0;
   }
 
   .price-canvas {
-    height: 360px;
+    height: 420px;
   }
 
   .indicator-canvas {

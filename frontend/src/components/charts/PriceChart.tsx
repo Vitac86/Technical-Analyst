@@ -24,11 +24,21 @@ type PriceChartIndicators = {
   bollingerBands?: IndicatorValue[];
 };
 
+export type ChartOverlays = {
+  showSma: boolean;
+  showEma: boolean;
+  showBollinger: boolean;
+  showLevels: boolean;
+  showVolume: boolean;
+};
+
 type PriceChartProps = {
   candles: Candle[];
   timeframe: string;
   indicators?: PriceChartIndicators;
   levels?: TechnicalLevel[];
+  overlays?: ChartOverlays;
+  onOverlayToggle?: (key: keyof ChartOverlays) => void;
   loading?: boolean;
   error?: string | null;
 };
@@ -45,11 +55,29 @@ const LEVEL_STYLE: Record<string, { color: string; title: string }> = {
 
 const ANNOTATED_KINDS = new Set(["support", "resistance", "target_up", "target_down", "stop_zone"]);
 
+const DEFAULT_OVERLAYS: ChartOverlays = {
+  showSma: true,
+  showEma: true,
+  showBollinger: true,
+  showLevels: true,
+  showVolume: true,
+};
+
+const OVERLAY_TOGGLES: { key: keyof ChartOverlays; label: string; activeClass: string }[] = [
+  { key: "showSma",       label: "SMA",    activeClass: "ot-sma" },
+  { key: "showEma",       label: "EMA",    activeClass: "ot-ema" },
+  { key: "showBollinger", label: "BB",     activeClass: "ot-bollinger" },
+  { key: "showLevels",    label: "Levels", activeClass: "ot-levels" },
+  { key: "showVolume",    label: "Vol",    activeClass: "ot-volume" },
+];
+
 export function PriceChart({
   candles,
   timeframe,
   indicators,
   levels,
+  overlays = DEFAULT_OVERLAYS,
+  onOverlayToggle,
   loading = false,
   error = null,
 }: PriceChartProps) {
@@ -80,6 +108,8 @@ export function PriceChart({
     [candles, indicators, timeframe],
   );
 
+  const { showSma, showEma, showBollinger, showLevels, showVolume } = overlays;
+
   useEffect(() => {
     const container = containerRef.current;
 
@@ -89,7 +119,7 @@ export function PriceChart({
 
     const chart: IChartApi = createChart(container, {
       width: container.clientWidth || 640,
-      height: 460,
+      height: 560,
       autoSize: true,
       layout: {
         background: { color: "#12161d" },
@@ -122,7 +152,7 @@ export function PriceChart({
     });
     candleSeries.setData(chartData.candles);
 
-    if (levels && levels.length > 0 && chartData.candles.length > 0) {
+    if (showLevels && levels && levels.length > 0) {
       const seen = new Set<string>();
       for (const level of levels) {
         if (
@@ -145,7 +175,7 @@ export function PriceChart({
       }
     }
 
-    if (chartData.volume.length > 0) {
+    if (showVolume && chartData.volume.length > 0) {
       const volumeSeries = chart.addSeries(HistogramSeries, {
         priceScaleId: "volume",
         priceFormat: { type: "volume" },
@@ -160,11 +190,13 @@ export function PriceChart({
       });
     }
 
-    addLine(chart, chartData.sma20, "#f2c94c", "SMA 20");
-    addLine(chart, chartData.ema20, "#56ccf2", "EMA 20");
-    addLine(chart, chartData.bollingerUpper, "#9b8cff", "BB upper", 1);
-    addLine(chart, chartData.bollingerMiddle, "#b8a7ff", "BB middle", 1);
-    addLine(chart, chartData.bollingerLower, "#9b8cff", "BB lower", 1);
+    if (showSma) addLine(chart, chartData.sma20, "#f2c94c", "SMA 20");
+    if (showEma) addLine(chart, chartData.ema20, "#56ccf2", "EMA 20");
+    if (showBollinger) {
+      addLine(chart, chartData.bollingerUpper,  "#9b8cff", "BB upper",  1 as LineWidth);
+      addLine(chart, chartData.bollingerMiddle, "#b8a7ff", "BB middle", 1 as LineWidth);
+      addLine(chart, chartData.bollingerLower,  "#9b8cff", "BB lower",  1 as LineWidth);
+    }
 
     chart.timeScale().fitContent();
 
@@ -177,7 +209,10 @@ export function PriceChart({
       resizeObserver.disconnect();
       chart.remove();
     };
-  }, [chartData, error, levels, loading, timeframe]);
+  }, [
+    chartData, error, levels, loading, timeframe,
+    showSma, showEma, showBollinger, showLevels, showVolume,
+  ]);
 
   const empty = !loading && !error && chartData.candles.length === 0;
 
@@ -185,12 +220,20 @@ export function PriceChart({
     <section className="panel chart-panel" aria-label="Price chart">
       <div className="panel-header">
         <h2>Price</h2>
+        <div className="chart-overlay-toggles" role="group" aria-label="Overlay controls">
+          {OVERLAY_TOGGLES.map(({ key, label, activeClass }) => (
+            <button
+              key={key}
+              type="button"
+              className={`overlay-toggle ${overlays[key] ? `overlay-toggle-active ${activeClass}` : ""}`}
+              onClick={() => onOverlayToggle?.(key)}
+              title={overlays[key] ? `Hide ${label}` : `Show ${label}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         <span className="panel-meta">{timeframe}</span>
-      </div>
-      <div className="chart-legend" aria-label="Price overlays">
-        <span className="legend-chip legend-sma">SMA 20</span>
-        <span className="legend-chip legend-ema">EMA 20</span>
-        <span className="legend-chip legend-bollinger">Bollinger Bands</span>
       </div>
       {loading ? <ChartState message="Loading price data..." /> : null}
       {error ? <ChartState message={error} tone="error" /> : null}
@@ -209,10 +252,7 @@ function addLine(
   title: string,
   width: LineWidth = lineWidth,
 ) {
-  if (data.length === 0) {
-    return;
-  }
-
+  if (data.length === 0) return;
   const series = chart.addSeries(LineSeries, {
     color,
     lineWidth: width,
