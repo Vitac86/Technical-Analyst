@@ -44,18 +44,64 @@ type InstrumentSource = {
   board: string;
 };
 
-const REFRESH_OPTIONS = ["off", "15", "30", "60"] as const;
-type RefreshInterval = (typeof REFRESH_OPTIONS)[number];
+const QUOTE_REFRESH_OPTIONS: { label: string; value: number | null }[] = [
+  { label: "Off", value: null },
+  { label: "15 sec", value: 15 },
+  { label: "30 sec", value: 30 },
+  { label: "60 sec", value: 60 },
+];
+
+// ---------------------------------------------------------------------------
+// localStorage helpers
+// ---------------------------------------------------------------------------
+
+const LS_PREFIX = "technicalAnalyst.chart.";
+
+function lsGet(key: string): string | null {
+  try {
+    return localStorage.getItem(LS_PREFIX + key);
+  } catch {
+    return null;
+  }
+}
+
+function lsSet(key: string, value: string): void {
+  try {
+    localStorage.setItem(LS_PREFIX + key, value);
+  } catch {
+    // storage might be unavailable
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Utility / pure functions
+// ---------------------------------------------------------------------------
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function sixMonthsAgo(): string {
+function defaultStartDate(tf: Timeframe): string {
   const d = new Date();
-  d.setMonth(d.getMonth() - 6);
+  if (tf === "1d") {
+    d.setMonth(d.getMonth() - 6);
+  } else {
+    d.setDate(d.getDate() - 30);
+  }
   return d.toISOString().slice(0, 10);
 }
+
+function candleRefreshMs(tf: Timeframe): number {
+  const map: Record<Timeframe, number> = {
+    "5m": 60_000,
+    "15m": 2 * 60_000,
+    "1h": 5 * 60_000,
+    "4h": 10 * 60_000,
+    "1d": 15 * 60_000,
+  };
+  return map[tf];
+}
+
 
 function createEmptyIndicators(): IndicatorMap {
   return {
@@ -71,15 +117,45 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
-function formatChange(change: number | null, changePct: number | null): string {
-  if (change === null || changePct === null) return "—";
+function formatChange(change: number | null, pct: number | null): string {
+  if (change === null || pct === null) return "";
   const sign = change >= 0 ? "+" : "";
-  return `${sign}${change.toFixed(2)} (${sign}${changePct.toFixed(2)}%)`;
+  return `${sign}${change.toFixed(2)} (${sign}${pct.toFixed(2)}%)`;
 }
 
 function formatTime(d: Date | null): string {
-  if (d === null) return "—";
-  return d.toLocaleTimeString("ru-RU");
+  return d ? d.toLocaleTimeString("ru-RU") : "—";
+}
+
+// ---------------------------------------------------------------------------
+// State initializers (read from localStorage with defaults)
+// ---------------------------------------------------------------------------
+
+function initSource(routeTicker?: string): InstrumentSource {
+  return {
+    ticker: (lsGet("ticker") ?? routeTicker?.toUpperCase() ?? "SBER").toUpperCase(),
+    engine: lsGet("engine") ?? "stock",
+    market: lsGet("market") ?? "shares",
+    board: lsGet("board") ?? "TQBR",
+  };
+}
+
+function initTimeframe(): Timeframe {
+  return (lsGet("timeframe") as Timeframe | null) ?? "1d";
+}
+
+function initStartDate(): string {
+  const saved = lsGet("start");
+  if (saved) return saved;
+  return defaultStartDate((lsGet("timeframe") as Timeframe | null) ?? "1d");
+}
+
+function initQuoteRefreshSeconds(): number | null {
+  const v = lsGet("quoteRefreshSeconds");
+  if (v === null) return 15;
+  if (v === "off") return null;
+  const n = parseInt(v, 10);
+  return isNaN(n) ? 15 : n;
 }
 
 // ---------------------------------------------------------------------------
@@ -89,15 +165,20 @@ function formatTime(d: Date | null): string {
 export function InstrumentPage() {
   const { ticker: routeTicker } = useParams<{ ticker?: string }>();
 
-  // Source selection
-  const [source, setSource] = useState<InstrumentSource>({
-    ticker: routeTicker?.toUpperCase() ?? "SBER",
-    engine: "stock",
-    market: "shares",
-    board: "TQBR",
-  });
+  // ── Settings state (persisted to localStorage) ──────────────────────────
+  const [source, setSource] = useState<InstrumentSource>(() => initSource(routeTicker));
+  const [timeframe, setTimeframe] = useState<Timeframe>(initTimeframe);
+  const [startDate, setStartDate] = useState<string>(initStartDate);
+  const [endDate, setEndDate] = useState<string>(() => lsGet("end") ?? today());
+  const [autoMode, setAutoMode] = useState<boolean>(() => lsGet("autoMode") !== "false");
+  const [quoteRefreshSeconds, setQuoteRefreshSeconds] = useState<number | null>(
+    initQuoteRefreshSeconds,
+  );
+  const [candleRefreshEnabled, setCandleRefreshEnabled] = useState<boolean>(
+    () => lsGet("candleRefreshEnabled") !== "false",
+  );
 
-  // Search
+  // ── Search ───────────────────────────────────────────────────────────────
   const [searchQuery, setSearchQuery] = useState(source.ticker);
   const [searchResults, setSearchResults] = useState<InstrumentSearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -105,83 +186,248 @@ export function InstrumentPage() {
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchBoxRef = useRef<HTMLDivElement>(null);
 
-  // Workspace settings
-  const [timeframe, setTimeframe] = useState<Timeframe>("1d");
-  const [startDate, setStartDate] = useState(sixMonthsAgo());
-  const [endDate, setEndDate] = useState(today());
-
-  // Loaded chart data
-  const [instrumentId, setInstrumentId] = useState<number | null>(null);
+  // ── Workspace / chart data ───────────────────────────────────────────────
   const [lastWorkspace, setLastWorkspace] = useState<WorkspaceLoadResponse | null>(null);
   const [lastPrice, setLastPrice] = useState<LastPriceSummary | null>(null);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [indicators, setIndicators] = useState<IndicatorMap>(createEmptyIndicators);
   const [candleCount, setCandleCount] = useState(0);
-  const [indicatorRowCount, setIndicatorRowCount] = useState(0);
 
-  // Signals
+  // ── Analysis ─────────────────────────────────────────────────────────────
   const [signals, setSignals] = useState<TechnicalSignalResponse | null>(null);
   const [signalsLoading, setSignalsLoading] = useState(false);
   const [signalsError, setSignalsError] = useState<string | null>(null);
-
-  // Levels
   const [levels, setLevels] = useState<TechnicalLevelsResponse | null>(null);
   const [levelsLoading, setLevelsLoading] = useState(false);
   const [levelsError, setLevelsError] = useState<string | null>(null);
 
-  // Quote
+  // ── Quote ────────────────────────────────────────────────────────────────
   const [quote, setQuote] = useState<QuoteSnapshot | null>(null);
-  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [quoteLoaded, setQuoteLoaded] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
-  const [lastQuoteRefreshTime, setLastQuoteRefreshTime] = useState<Date | null>(null);
+  const [lastQuoteTime, setLastQuoteTime] = useState<Date | null>(null);
   const [lastCandleSyncTime, setLastCandleSyncTime] = useState<Date | null>(null);
 
-  // Auto-refresh
-  const [autoRefreshInterval, setAutoRefreshInterval] = useState<RefreshInterval>("off");
-  const [alsoRefreshCandles, setAlsoRefreshCandles] = useState(false);
-
-  // UI states
-  const [loadLoading, setLoadLoading] = useState(false);
+  // ── UI ───────────────────────────────────────────────────────────────────
+  const [isUpdating, setIsUpdating] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [calcLoading, setCalcLoading] = useState(false);
 
-  // Refs for stable closures in the auto-refresh timer
+  // ── Stable refs (for polling closures) ──────────────────────────────────
   const sourceRef = useRef(source);
   sourceRef.current = source;
-  const alsoRefreshCandlesRef = useRef(alsoRefreshCandles);
-  alsoRefreshCandlesRef.current = alsoRefreshCandles;
-  const isRefreshingRef = useRef(false);
+  const timeframeRef = useRef(timeframe);
+  timeframeRef.current = timeframe;
+  const startDateRef = useRef(startDate);
+  startDateRef.current = startDate;
+  const endDateRef = useRef(endDate);
+  endDateRef.current = endDate;
+  const autoModeRef = useRef(autoMode);
+  autoModeRef.current = autoMode;
 
-  // Keep search input in sync with route ticker on first render
-  useEffect(() => {
-    if (routeTicker) {
-      setSource((s) => ({ ...s, ticker: routeTicker.toUpperCase() }));
-      setSearchQuery(routeTicker.toUpperCase());
+  const isWorkspaceLoadingRef = useRef(false);
+  const isQuoteLoadingRef = useRef(false);
+  const initDoneRef = useRef(false);
+
+  // ── Core async functions ─────────────────────────────────────────────────
+
+  async function reloadSignals(id: number, tf: Timeframe) {
+    setSignalsLoading(true);
+    setSignalsError(null);
+    try {
+      setSignals(await getTechnicalSignals(id, tf));
+    } catch (err) {
+      setSignalsError(errorMessage(err, "Failed to load signals."));
+      setSignals(null);
+    } finally {
+      setSignalsLoading(false);
     }
+  }
+
+  async function reloadLevels(id: number, tf: Timeframe) {
+    setLevelsLoading(true);
+    setLevelsError(null);
+    try {
+      setLevels(await getTechnicalLevels(id, tf));
+    } catch (err) {
+      setLevelsError(errorMessage(err, "Failed to load levels."));
+      setLevels(null);
+    } finally {
+      setLevelsLoading(false);
+    }
+  }
+
+  async function fetchQuote(src: InstrumentSource) {
+    if (isQuoteLoadingRef.current) return;
+    isQuoteLoadingRef.current = true;
+    try {
+      const q = await getMoexQuote(src);
+      setQuote(q);
+      setLastQuoteTime(new Date());
+      setQuoteError(null);
+    } catch {
+      setQuoteError("Quote unavailable");
+    } finally {
+      isQuoteLoadingRef.current = false;
+      setQuoteLoaded(true);
+    }
+  }
+
+  // Main workspace load — all optional params fall back to current refs
+  async function doWorkspaceLoad(
+    src?: InstrumentSource,
+    tf?: Timeframe,
+    start?: string,
+    end?: string,
+  ) {
+    if (isWorkspaceLoadingRef.current) return;
+    isWorkspaceLoadingRef.current = true;
+    setIsUpdating(true);
+    setLoadError(null);
+
+    const useSrc = src ?? sourceRef.current;
+    const useTf = tf ?? timeframeRef.current;
+    const useStart = start ?? startDateRef.current;
+    const useEnd = end ?? endDateRef.current;
+
+    try {
+      const ws = await loadWorkspace({
+        ticker: useSrc.ticker,
+        engine: useSrc.engine,
+        market: useSrc.market,
+        board: useSrc.board,
+        timeframe: useTf,
+        start: useStart,
+        end: useEnd,
+        calculate_indicators: true,
+      });
+
+      setLastWorkspace(ws);
+      setLastPrice(ws.last_price);
+      const id = ws.instrument.id;
+      setLastCandleSyncTime(new Date());
+
+      const [nextCandles, ...indicatorRows] = await Promise.all([
+        getCandles(id, useTf),
+        ...INDICATOR_NAMES.map((name) => getIndicatorValues(id, name, useTf)),
+      ]);
+
+      setCandles(nextCandles);
+      setCandleCount(nextCandles.length);
+      setIndicators(
+        Object.fromEntries(
+          INDICATOR_NAMES.map((name, i) => [name, indicatorRows[i] ?? []]),
+        ) as IndicatorMap,
+      );
+
+      await Promise.all([reloadSignals(id, useTf), reloadLevels(id, useTf)]);
+    } catch (err) {
+      const msg = errorMessage(err, "Failed to load workspace data.");
+      setLoadError(
+        msg.toLowerCase().includes("no candle") || msg.toLowerCase().includes("no data")
+          ? "No candles returned for this timeframe/date range. Try a more recent range."
+          : msg,
+      );
+    } finally {
+      isWorkspaceLoadingRef.current = false;
+      setIsUpdating(false);
+    }
+  }
+
+  // ── Effects ──────────────────────────────────────────────────────────────
+
+  // Initial auto-load — once, StrictMode-safe
+  useEffect(() => {
+    if (initDoneRef.current) return;
+    initDoneRef.current = true;
+
+    void fetchQuote(sourceRef.current);
+
+    if (autoModeRef.current) {
+      // candles are empty on page open → always stale → trigger load
+      void doWorkspaceLoad();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Route ticker change (navigating to /instruments/:ticker after mount)
+  useEffect(() => {
+    if (!routeTicker || !initDoneRef.current) return;
+    const upper = routeTicker.toUpperCase();
+    if (upper === sourceRef.current.ticker) return;
+    const newSrc = { ...sourceRef.current, ticker: upper };
+    setSource(newSrc);
+    setSearchQuery(upper);
+    void fetchQuote(newSrc);
+    if (autoModeRef.current) void doWorkspaceLoad(newSrc);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeTicker]);
 
   // Close search dropdown on outside click
   useEffect(() => {
-    function onMouseDown(e: MouseEvent) {
-      if (
-        searchBoxRef.current &&
-        !searchBoxRef.current.contains(e.target as Node)
-      ) {
+    function onDown(e: MouseEvent) {
+      if (searchBoxRef.current && !searchBoxRef.current.contains(e.target as Node)) {
         setSearchOpen(false);
       }
     }
-    document.addEventListener("mousedown", onMouseDown);
-    return () => document.removeEventListener("mousedown", onMouseDown);
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
   }, []);
 
-  // Debounced search
+  // Quote refresh polling
+  useEffect(() => {
+    if (!autoMode || quoteRefreshSeconds === null) return;
+    const ms = quoteRefreshSeconds * 1000;
+    const id = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void fetchQuote(sourceRef.current);
+    }, ms);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoMode, quoteRefreshSeconds]);
+
+  // Candle refresh polling (throttled by timeframe; workspace endpoint guards MOEX staleness)
+  useEffect(() => {
+    if (!autoMode || !candleRefreshEnabled) return;
+    const ms = candleRefreshMs(timeframe);
+    const id = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void doWorkspaceLoad();
+    }, ms);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoMode, candleRefreshEnabled, timeframe, startDate, endDate]);
+
+  // Reload signals/levels when timeframe or instrument changes
+  useEffect(() => {
+    if (lastWorkspace?.instrument.id != null) {
+      void reloadSignals(lastWorkspace.instrument.id, timeframe);
+      void reloadLevels(lastWorkspace.instrument.id, timeframe);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeframe, lastWorkspace?.instrument.id]);
+
+  // ── Persist settings to localStorage ─────────────────────────────────────
+  useEffect(() => {
+    lsSet("ticker", source.ticker);
+    lsSet("engine", source.engine);
+    lsSet("market", source.market);
+    lsSet("board", source.board);
+  }, [source]);
+  useEffect(() => { lsSet("timeframe", timeframe); }, [timeframe]);
+  useEffect(() => { lsSet("start", startDate); }, [startDate]);
+  useEffect(() => { lsSet("end", endDate); }, [endDate]);
+  useEffect(() => { lsSet("autoMode", autoMode ? "true" : "false"); }, [autoMode]);
+  useEffect(() => {
+    lsSet("quoteRefreshSeconds", quoteRefreshSeconds === null ? "off" : String(quoteRefreshSeconds));
+  }, [quoteRefreshSeconds]);
+  useEffect(() => {
+    lsSet("candleRefreshEnabled", candleRefreshEnabled ? "true" : "false");
+  }, [candleRefreshEnabled]);
+
+  // ── Debounced instrument search ──────────────────────────────────────────
   const triggerSearch = useCallback((q: string) => {
     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
-    if (q.trim().length < 1) {
-      setSearchResults([]);
-      setSearchOpen(false);
-      return;
-    }
+    if (q.trim().length < 1) { setSearchResults([]); setSearchOpen(false); return; }
     searchDebounceRef.current = setTimeout(async () => {
       setSearchLoading(true);
       try {
@@ -196,297 +442,104 @@ export function InstrumentPage() {
     }, 400);
   }, []);
 
+  // ── Event handlers ───────────────────────────────────────────────────────
+
   function handleSearchInput(value: string) {
     setSearchQuery(value);
     triggerSearch(value);
   }
 
   function handleSelectSearchResult(result: InstrumentSearchResult) {
-    setSource({
+    const newSrc: InstrumentSource = {
       ticker: result.ticker,
       engine: result.engine ?? "stock",
       market: result.market ?? "shares",
       board: result.board ?? "TQBR",
-    });
+    };
+    setSource(newSrc);
     setSearchQuery(result.ticker);
     setSearchOpen(false);
     setSearchResults([]);
+    void fetchQuote(newSrc);
+    if (autoModeRef.current) void doWorkspaceLoad(newSrc);
   }
 
-  async function reloadSignals(id: number, tf: Timeframe) {
-    setSignalsLoading(true);
-    setSignalsError(null);
-    try {
-      const result = await getTechnicalSignals(id, tf);
-      setSignals(result);
-    } catch (err) {
-      setSignalsError(errorMessage(err, "Failed to load signals."));
-      setSignals(null);
-    } finally {
-      setSignalsLoading(false);
-    }
+  function handleTimeframeChange(tf: Timeframe) {
+    if (tf === timeframeRef.current) return;
+    setTimeframe(tf);
+    const newStart = defaultStartDate(tf);
+    setStartDate(newStart);
+    if (autoModeRef.current) void doWorkspaceLoad(undefined, tf, newStart);
   }
 
-  async function reloadLevels(id: number, tf: Timeframe) {
-    setLevelsLoading(true);
-    setLevelsError(null);
-    try {
-      const result = await getTechnicalLevels(id, tf);
-      setLevels(result);
-    } catch (err) {
-      setLevelsError(errorMessage(err, "Failed to load levels."));
-      setLevels(null);
-    } finally {
-      setLevelsLoading(false);
-    }
+  function handleLoad() {
+    void doWorkspaceLoad();
   }
 
-  async function fetchQuote(src: InstrumentSource) {
-    setQuoteLoading(true);
-    setQuoteError(null);
-    try {
-      const q = await getMoexQuote(src);
-      setQuote(q);
-      setLastQuoteRefreshTime(new Date());
-    } catch {
-      setQuoteError("Quote unavailable");
-      setQuote(null);
-    } finally {
-      setQuoteLoading(false);
-    }
-  }
-
-  // Fetch quote whenever source changes
-  useEffect(() => {
-    void fetchQuote(source);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source.ticker, source.engine, source.market, source.board]);
-
-  // Load workspace data
-  async function handleLoad() {
-    setLoadLoading(true);
-    setLoadError(null);
-
-    try {
-      const ws = await loadWorkspace({
-        ticker: source.ticker,
-        engine: source.engine,
-        market: source.market,
-        board: source.board,
-        timeframe,
-        start: startDate,
-        end: endDate,
-        calculate_indicators: true,
-      });
-
-      setLastWorkspace(ws);
-      setLastPrice(ws.last_price);
-      const id = ws.instrument.id;
-      setInstrumentId(id);
-      setLastCandleSyncTime(new Date());
-
-      // Load candles, indicators, and signals in parallel
-      const [nextCandles, ...indicatorRows] = await Promise.all([
-        getCandles(id, timeframe),
-        ...INDICATOR_NAMES.map((name) => getIndicatorValues(id, name, timeframe)),
-      ]);
-
-      setCandles(nextCandles);
-      setCandleCount(nextCandles.length);
-
-      const nextIndicators = Object.fromEntries(
-        INDICATOR_NAMES.map((name, i) => [name, indicatorRows[i] ?? []]),
-      ) as IndicatorMap;
-      setIndicators(nextIndicators);
-      setIndicatorRowCount(
-        INDICATOR_NAMES.reduce((n, name) => n + (nextIndicators[name].length), 0),
-      );
-
-      await Promise.all([reloadSignals(id, timeframe), reloadLevels(id, timeframe)]);
-    } catch (err) {
-      setLoadError(errorMessage(err, "Failed to load workspace data."));
-    } finally {
-      setLoadLoading(false);
-    }
-  }
-
-  // Recalculate indicators only (no candle sync)
-  async function handleRecalculate() {
-    if (instrumentId === null) return;
-    setCalcLoading(true);
-    setLoadError(null);
-
-    try {
-      const [nextCandles, ...indicatorRows] = await Promise.all([
-        getCandles(instrumentId, timeframe),
-        ...INDICATOR_NAMES.map((name) =>
-          getIndicatorValues(instrumentId, name, timeframe),
-        ),
-      ]);
-
-      setCandles(nextCandles);
-      setCandleCount(nextCandles.length);
-      const nextIndicators = Object.fromEntries(
-        INDICATOR_NAMES.map((name, i) => [name, indicatorRows[i] ?? []]),
-      ) as IndicatorMap;
-      setIndicators(nextIndicators);
-      setIndicatorRowCount(
-        INDICATOR_NAMES.reduce((n, name) => n + nextIndicators[name].length, 0),
-      );
-
-      await Promise.all([
-        reloadSignals(instrumentId, timeframe),
-        reloadLevels(instrumentId, timeframe),
-      ]);
-    } catch (err) {
-      setLoadError(errorMessage(err, "Failed to reload indicators."));
-    } finally {
-      setCalcLoading(false);
-    }
-  }
-
-  // Reload signals and levels when timeframe changes and data is already loaded
-  useEffect(() => {
-    if (instrumentId !== null) {
-      void reloadSignals(instrumentId, timeframe);
-      void reloadLevels(instrumentId, timeframe);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [timeframe, instrumentId]);
-
-  // Auto-refresh timer — recreates only when interval setting changes
-  useEffect(() => {
-    if (autoRefreshInterval === "off") return;
-
-    const ms = parseInt(autoRefreshInterval, 10) * 1000;
-    const id = setInterval(async () => {
-      if (isRefreshingRef.current) return;
-      isRefreshingRef.current = true;
-      try {
-        await fetchQuote(sourceRef.current);
-        if (alsoRefreshCandlesRef.current) {
-          // Full workspace reload — uses latest source/timeframe via handleLoad
-          await (async () => {
-            setLoadLoading(true);
-            setLoadError(null);
-            try {
-              const src = sourceRef.current;
-              const ws = await loadWorkspace({
-                ticker: src.ticker,
-                engine: src.engine,
-                market: src.market,
-                board: src.board,
-                timeframe,
-                start: startDate,
-                end: endDate,
-                calculate_indicators: true,
-              });
-              setLastWorkspace(ws);
-              setLastPrice(ws.last_price);
-              const wid = ws.instrument.id;
-              setInstrumentId(wid);
-              setLastCandleSyncTime(new Date());
-
-              const [nextCandles, ...indicatorRows] = await Promise.all([
-                getCandles(wid, timeframe),
-                ...INDICATOR_NAMES.map((name) => getIndicatorValues(wid, name, timeframe)),
-              ]);
-              setCandles(nextCandles);
-              setCandleCount(nextCandles.length);
-              const nextIndicators = Object.fromEntries(
-                INDICATOR_NAMES.map((name, i) => [name, indicatorRows[i] ?? []]),
-              ) as IndicatorMap;
-              setIndicators(nextIndicators);
-              setIndicatorRowCount(
-                INDICATOR_NAMES.reduce((n, name) => n + nextIndicators[name].length, 0),
-              );
-              await Promise.all([
-                reloadSignals(wid, timeframe),
-                reloadLevels(wid, timeframe),
-              ]);
-            } catch (err) {
-              setLoadError(errorMessage(err, "Auto-refresh failed."));
-            } finally {
-              setLoadLoading(false);
-            }
-          })();
-        }
-      } finally {
-        isRefreshingRef.current = false;
-      }
-    }, ms);
-
-    return () => clearInterval(id);
-    // timeframe/startDate/endDate included so candle refresh uses correct range
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRefreshInterval, timeframe, startDate, endDate]);
-
+  // ── Derived display values ───────────────────────────────────────────────
   const instrument = lastWorkspace?.instrument ?? null;
+  const displayPrice = quote?.last_price ?? lastPrice?.last_close ?? null;
+  const displayChange = quote?.change ?? lastPrice?.change ?? null;
+  const displayChangePct = quote?.change_percent ?? lastPrice?.change_percent ?? null;
+  const changePositive = (displayChange ?? 0) >= 0;
+  const noData = candles.length === 0;
+
+  // ── Render ───────────────────────────────────────────────────────────────
 
   return (
     <div className="instrument-page">
-      {/* ------------------------------------------------------------------ */}
-      {/* Header / instrument info                                            */}
-      {/* ------------------------------------------------------------------ */}
-      <section className="page-heading instrument-heading">
-        <div>
-          <p className="eyebrow">Instrument</p>
-          <h2>
-            {instrument?.ticker ?? source.ticker}
-            {instrument?.name ? <span>{instrument.name}</span> : null}
-          </h2>
-          {instrument ? (
-            <p className="instrument-meta">
-              {[instrument.engine, instrument.market, instrument.board, instrument.currency]
-                .filter(Boolean)
-                .join(" · ")}
-            </p>
+
+      {/* 1 ─ Compact instrument header */}
+      <header className="instr-header">
+        <div className="instr-id-block">
+          <span className="instr-ticker">{instrument?.ticker ?? source.ticker}</span>
+          {instrument?.name ? (
+            <span className="instr-name">{instrument.name}</span>
           ) : null}
+          <span className="instr-meta">
+            {instrument
+              ? [instrument.engine, instrument.market, instrument.board, instrument.currency]
+                  .filter(Boolean).join(" · ")
+              : [source.engine, source.market, source.board].join(" · ")}
+          </span>
+          <span className="instr-tf-badge">{timeframe}</span>
         </div>
 
-        {/* Last-price panel (from candle history) */}
-        {lastPrice?.last_close != null ? (
-          <div className="last-price-panel">
-            <span className="last-price-value">{lastPrice.last_close.toFixed(2)}</span>
-            <span
-              className={
-                "last-price-change " +
-                ((lastPrice.change ?? 0) >= 0 ? "positive" : "negative")
-              }
-            >
-              {formatChange(lastPrice.change, lastPrice.change_percent)}
-            </span>
-            {lastPrice.last_timestamp ? (
-              <span className="last-price-ts">
-                {new Date(lastPrice.last_timestamp).toLocaleDateString("ru-RU")}
+        <div className="instr-price-block">
+          {displayPrice !== null ? (
+            <>
+              <span className="instr-last-price">{displayPrice.toFixed(2)}</span>
+              <span className={`instr-change ${changePositive ? "positive" : "negative"}`}>
+                {formatChange(displayChange, displayChangePct)}
               </span>
+            </>
+          ) : null}
+          <div className="instr-times">
+            <span className="instr-time-item">Q {formatTime(lastQuoteTime)}</span>
+            {lastCandleSyncTime !== null ? (
+              <span className="instr-time-item">C {formatTime(lastCandleSyncTime)}</span>
             ) : null}
           </div>
-        ) : null}
-      </section>
+        </div>
+      </header>
 
-      {/* ------------------------------------------------------------------ */}
-      {/* Quote snapshot card                                                 */}
-      {/* ------------------------------------------------------------------ */}
-      <QuoteSummaryCard quote={quote} loading={quoteLoading} error={quoteError} />
+      {/* 2 ─ Quote summary grid */}
+      <QuoteSummaryCard quote={quote} loading={!quoteLoaded} error={quoteError} />
 
-      {/* ------------------------------------------------------------------ */}
-      {/* Controls                                                            */}
-      {/* ------------------------------------------------------------------ */}
-      <section className="workspace-controls">
+      {/* 3 ─ Controls row */}
+      <section className="chart-controls">
+
         {/* Instrument search */}
-        <div className="control-group" ref={searchBoxRef}>
-          <label htmlFor="instrument-search">Search instrument</label>
+        <div className="ctrl-group" ref={searchBoxRef}>
+          <label className="ctrl-label">Instrument</label>
           <div className="search-wrapper">
             <input
-              id="instrument-search"
               type="text"
+              className="ctrl-input-text"
               value={searchQuery}
               onChange={(e) => handleSearchInput(e.target.value)}
-              onFocus={() => {
-                if (searchResults.length > 0) setSearchOpen(true);
-              }}
-              placeholder="SBER, GAZP, USD000UTSTOM…"
+              onFocus={() => { if (searchResults.length > 0) setSearchOpen(true); }}
+              placeholder="SBER, GAZP…"
               autoComplete="off"
             />
             {searchLoading ? <span className="search-spinner">…</span> : null}
@@ -509,141 +562,129 @@ export function InstrumentPage() {
           </div>
         </div>
 
-        {/* Selected source display */}
-        <div className="control-group">
-          <label>Selected</label>
-          <span className="selected-source">
-            {source.ticker}
-            {" — "}
+        {/* Selected source */}
+        <div className="ctrl-group">
+          <label className="ctrl-label">Source</label>
+          <span className="instr-source-chip">
             {[source.engine, source.market, source.board].join("/")}
           </span>
         </div>
 
-        {/* Timeframe selector */}
-        <div className="control-group">
-          <label htmlFor="timeframe-select">Timeframe</label>
-          <select
-            id="timeframe-select"
-            value={timeframe}
-            onChange={(e) => setTimeframe(e.target.value as Timeframe)}
-          >
+        {/* Timeframe */}
+        <div className="ctrl-group">
+          <label className="ctrl-label">Timeframe</label>
+          <div className="tf-selector">
             {TIMEFRAMES.map((tf) => (
-              <option key={tf} value={tf}>
+              <button
+                key={tf}
+                type="button"
+                className={`tf-btn ${timeframe === tf ? "tf-btn-active" : ""}`}
+                onClick={() => handleTimeframeChange(tf)}
+              >
                 {tf}
-              </option>
+              </button>
             ))}
-          </select>
+          </div>
         </div>
 
         {/* Date range */}
-        <div className="control-group">
-          <label htmlFor="start-date">From</label>
+        <div className="ctrl-group">
+          <label className="ctrl-label">From</label>
           <input
-            id="start-date"
             type="date"
+            className="ctrl-input-date"
             value={startDate}
             onChange={(e) => setStartDate(e.target.value)}
           />
         </div>
 
-        <div className="control-group">
-          <label htmlFor="end-date">To</label>
+        <div className="ctrl-group">
+          <label className="ctrl-label">To</label>
           <input
-            id="end-date"
             type="date"
+            className="ctrl-input-date"
             value={endDate}
             onChange={(e) => setEndDate(e.target.value)}
           />
         </div>
 
-        {/* Action buttons */}
-        <div className="control-group control-buttons">
+        {/* Auto mode toggle */}
+        <div className="ctrl-group">
+          <label className="ctrl-label">Auto mode</label>
           <button
             type="button"
-            className="btn-primary"
-            onClick={() => void handleLoad()}
-            disabled={loadLoading || calcLoading}
+            className={`auto-mode-btn ${autoMode ? "auto-mode-on" : "auto-mode-off"}`}
+            onClick={() => setAutoMode((v) => !v)}
           >
-            {loadLoading ? "Loading…" : "Load / update data"}
+            {autoMode ? "ON" : "OFF"}
           </button>
-          {instrumentId !== null ? (
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => void handleRecalculate()}
-              disabled={loadLoading || calcLoading}
-            >
-              {calcLoading ? "Recalculating…" : "Recalculate indicators"}
-            </button>
-          ) : null}
         </div>
-      </section>
 
-      {/* ------------------------------------------------------------------ */}
-      {/* Auto-refresh controls                                               */}
-      {/* ------------------------------------------------------------------ */}
-      <section className="workspace-controls auto-refresh-controls">
-        <div className="control-group">
-          <label htmlFor="auto-refresh-select">Auto-refresh</label>
+        {/* Quote refresh interval */}
+        <div className="ctrl-group">
+          <label className="ctrl-label">Quote refresh</label>
           <select
-            id="auto-refresh-select"
-            value={autoRefreshInterval}
-            onChange={(e) => setAutoRefreshInterval(e.target.value as RefreshInterval)}
+            className="ctrl-select"
+            value={quoteRefreshSeconds === null ? "off" : String(quoteRefreshSeconds)}
+            onChange={(e) =>
+              setQuoteRefreshSeconds(
+                e.target.value === "off" ? null : parseInt(e.target.value, 10),
+              )
+            }
           >
-            <option value="off">Off</option>
-            <option value="15">15 sec</option>
-            <option value="30">30 sec</option>
-            <option value="60">60 sec</option>
+            {QUOTE_REFRESH_OPTIONS.map((opt) => (
+              <option key={opt.label} value={opt.value === null ? "off" : String(opt.value)}>
+                {opt.label}
+              </option>
+            ))}
           </select>
         </div>
 
-        {autoRefreshInterval !== "off" ? (
-          <div className="control-group">
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={alsoRefreshCandles}
-                onChange={(e) => setAlsoRefreshCandles(e.target.checked)}
-              />
-              {" "}Also refresh candles
-            </label>
-          </div>
-        ) : null}
+        {/* Candle refresh toggle */}
+        <div className="ctrl-group ctrl-checkbox-group">
+          <label className="ctrl-label">Candles</label>
+          <label className="checkbox-label">
+            <input
+              type="checkbox"
+              checked={candleRefreshEnabled}
+              onChange={(e) => setCandleRefreshEnabled(e.target.checked)}
+            />
+            Auto-sync
+          </label>
+        </div>
 
-        <div className="control-group refresh-status">
-          <span className="refresh-stat">
-            Quote refreshed: <strong>{formatTime(lastQuoteRefreshTime)}</strong>
-          </span>
-          {lastCandleSyncTime !== null ? (
-            <span className="refresh-stat">
-              Candles synced: <strong>{formatTime(lastCandleSyncTime)}</strong>
-            </span>
-          ) : null}
+        {/* Manual load */}
+        <div className="ctrl-group ctrl-actions">
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={handleLoad}
+            disabled={isUpdating}
+          >
+            {isUpdating ? "Updating…" : "Load / update"}
+          </button>
         </div>
       </section>
 
-      {/* Error */}
-      {loadError ? (
-        <div className="page-alert" role="alert">
-          {loadError}
-        </div>
-      ) : null}
+      {/* 4 ─ Status bar */}
+      <div className="chart-status-bar">
+        <span className={`auto-badge ${autoMode ? "auto-badge-on" : "auto-badge-off"}`}>
+          Auto {autoMode ? "ON" : "OFF"}
+        </span>
+        {isUpdating ? <span className="status-updating">Updating…</span> : null}
+        <span className="status-item">Quote {formatTime(lastQuoteTime)}</span>
+        {lastCandleSyncTime !== null ? (
+          <span className="status-item">Candles {formatTime(lastCandleSyncTime)}</span>
+        ) : null}
+        {candleCount > 0 ? (
+          <span className="status-item">{candleCount} candles · {timeframe}</span>
+        ) : null}
+        {loadError !== null ? (
+          <span className="status-error" title={loadError}>{loadError}</span>
+        ) : null}
+      </div>
 
-      {/* Status line */}
-      <p className="status-line">
-        {instrument ? (
-          <>
-            Candles: {candleCount} · Indicator rows: {indicatorRowCount} · Timeframe:{" "}
-            {timeframe}
-          </>
-        ) : (
-          "Select an instrument and click Load / update data."
-        )}
-      </p>
-
-      {/* ------------------------------------------------------------------ */}
-      {/* Charts                                                              */}
-      {/* ------------------------------------------------------------------ */}
+      {/* 5 ─ Price chart */}
       <PriceChart
         candles={candles}
         timeframe={timeframe}
@@ -652,46 +693,35 @@ export function InstrumentPage() {
           ema20: indicators.ema_20,
           bollingerBands: indicators.bollinger_bands_20_2,
         }}
-        loading={loadLoading}
-        error={loadError}
+        loading={isUpdating && noData}
+        error={null}
       />
 
+      {/* 6 ─ Indicator panels */}
       <div className="indicator-panels">
         <IndicatorPanel
           title="RSI 14"
           values={indicators.rsi_14}
           timeframe={timeframe}
           variant="rsi"
-          loading={loadLoading}
-          error={loadError}
+          loading={isUpdating && noData}
+          error={null}
         />
         <IndicatorPanel
           title="MACD 12 26 9"
           values={indicators.macd_12_26_9}
           timeframe={timeframe}
           variant="macd"
-          loading={loadLoading}
-          error={loadError}
+          loading={isUpdating && noData}
+          error={null}
         />
       </div>
 
-      {/* ------------------------------------------------------------------ */}
-      {/* Technical Research Signals                                          */}
-      {/* ------------------------------------------------------------------ */}
-      <TechnicalSignalsPanel
-        data={signals}
-        loading={signalsLoading}
-        error={signalsError}
-      />
-
-      {/* ------------------------------------------------------------------ */}
-      {/* Levels & Targets                                                    */}
-      {/* ------------------------------------------------------------------ */}
-      <TechnicalLevelsPanel
-        data={levels}
-        loading={levelsLoading}
-        error={levelsError}
-      />
+      {/* 7 ─ Analysis panels — 2-col on desktop */}
+      <div className="analysis-panels">
+        <TechnicalSignalsPanel data={signals} loading={signalsLoading} error={signalsError} />
+        <TechnicalLevelsPanel data={levels} loading={levelsLoading} error={levelsError} />
+      </div>
     </div>
   );
 }

@@ -1202,15 +1202,458 @@ a {
   color: #f2c94c;
 }
 
+/* ------------------------------------------------------------------ */
+/* Compact instrument header (Chart Workspace v2)                      */
+/* ------------------------------------------------------------------ */
+
+.instr-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid #2a3038;
+  border-radius: 8px;
+  background: #171b22;
+  padding: 10px 16px;
+  flex-wrap: wrap;
+}
+
+.instr-id-block {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.instr-ticker {
+  font-size: 20px;
+  font-weight: 800;
+  color: #f0f4f8;
+  letter-spacing: -0.01em;
+}
+
+.instr-name {
+  font-size: 13px;
+  color: #97a3b3;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+.instr-meta {
+  font-size: 11px;
+  color: #7a8ea3;
+  font-weight: 600;
+}
+
+.instr-tf-badge {
+  background: #1a2840;
+  border: 1px solid #2a4870;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  color: #6baed6;
+  letter-spacing: 0.04em;
+}
+
+.instr-price-block {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.instr-last-price {
+  font-size: 22px;
+  font-weight: 800;
+  color: #f0f4f8;
+  letter-spacing: -0.01em;
+}
+
+.instr-change {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.instr-change.positive { color: #31b181; }
+.instr-change.negative { color: #eb5757; }
+
+.instr-times {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-left: 1px solid #2a3038;
+  padding-left: 12px;
+}
+
+.instr-time-item {
+  font-size: 10px;
+  color: #7a8ea3;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------ */
+/* Quote summary card (Chart Workspace v2)                             */
+/* ------------------------------------------------------------------ */
+
+.quote-card {
+  border: 1px solid #2a3038;
+  border-radius: 8px;
+  background: #171b22;
+  padding: 12px 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.quote-card-loading,
+.quote-card-unavailable {
+  display: flex;
+  align-items: center;
+  padding: 10px 16px;
+  color: #7a8ea3;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid #2a3038;
+  border-radius: 8px;
+  background: #171b22;
+  min-height: 52px;
+}
+
+.quote-card-main {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.quote-last-price {
+  font-size: 24px;
+  font-weight: 800;
+  color: #f0f4f8;
+  letter-spacing: -0.01em;
+}
+
+.quote-change {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.quote-change-positive { color: #31b181; }
+.quote-change-negative { color: #eb5757; }
+
+.quote-no-price {
+  font-size: 14px;
+  color: #7a8ea3;
+  font-weight: 600;
+}
+
+.quote-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+  gap: 6px;
+}
+
+.quote-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: #1b2028;
+  border: 1px solid #2d3540;
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
+.quote-label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #7a8ea3;
+}
+
+.quote-value {
+  font-size: 13px;
+  font-weight: 700;
+  color: #e7ecf2;
+}
+
+.quote-card-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 4px;
+  border-top: 1px solid #232b36;
+}
+
+.quote-meta {
+  font-size: 11px;
+  color: #7a8ea3;
+  font-weight: 600;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+.quote-source {
+  font-size: 11px;
+  color: #7a8ea3;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  margin-left: auto;
+}
+
+/* ------------------------------------------------------------------ */
+/* Chart controls row (Chart Workspace v2)                             */
+/* ------------------------------------------------------------------ */
+
+.chart-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 14px;
+  border: 1px solid #2a3038;
+  border-radius: 8px;
+  background: #171b22;
+  padding: 12px 16px;
+}
+
+.ctrl-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ctrl-label {
+  color: #97a3b3;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ctrl-input-text {
+  border: 1px solid #344050;
+  border-radius: 6px;
+  background: #151922;
+  color: #f0f4f8;
+  font: inherit;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 7px 10px;
+  min-width: 180px;
+}
+
+.ctrl-input-date {
+  border: 1px solid #344050;
+  border-radius: 6px;
+  background: #151922;
+  color: #f0f4f8;
+  font: inherit;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 7px 10px;
+  width: 128px;
+}
+
+.ctrl-select {
+  border: 1px solid #344050;
+  border-radius: 6px;
+  background: #151922;
+  color: #f0f4f8;
+  font: inherit;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 7px 10px;
+  min-width: 90px;
+}
+
+.ctrl-checkbox-group {
+  flex-direction: column;
+}
+
+.ctrl-actions {
+  flex-direction: row;
+  align-items: flex-end;
+}
+
+.instr-source-chip {
+  display: inline-block;
+  border: 1px solid #2a4870;
+  border-radius: 5px;
+  background: #1a2840;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #6baed6;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  white-space: nowrap;
+}
+
+/* Timeframe selector in controls */
+.tf-selector {
+  display: flex;
+  gap: 3px;
+}
+
+/* Auto mode toggle button */
+.auto-mode-btn {
+  border-radius: 5px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 7px 16px;
+  transition: opacity 0.15s;
+  white-space: nowrap;
+}
+
+.auto-mode-on {
+  background: #1a3d2b;
+  color: #31b181;
+  border: 1px solid #27ae60;
+}
+
+.auto-mode-off {
+  background: #242a34;
+  color: #7a8ea3;
+  border: 1px solid #344050;
+}
+
+/* Checkbox label */
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #c7d0dc;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  padding: 6px 0;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: #3b82f6;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Chart status bar (Chart Workspace v2)                               */
+/* ------------------------------------------------------------------ */
+
+.chart-status-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  padding: 7px 14px;
+  border: 1px solid #2a3038;
+  border-radius: 6px;
+  background: #13171d;
+}
+
+.auto-badge {
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.auto-badge-on {
+  background: #1a3d2b;
+  color: #31b181;
+  border: 1px solid #27ae60;
+}
+
+.auto-badge-off {
+  background: #242a34;
+  color: #7a8ea3;
+  border: 1px solid #344050;
+}
+
+.status-item {
+  color: #7a8ea3;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  white-space: nowrap;
+}
+
+.status-updating {
+  color: #f2c94c;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.status-error {
+  color: #eb5757;
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 380px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Analysis panels — 2-column on desktop (Chart Workspace v2)          */
+/* ------------------------------------------------------------------ */
+
+.analysis-panels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
+/* ------------------------------------------------------------------ */
+/* Responsive breakpoints                                              */
+/* ------------------------------------------------------------------ */
+
 @media (max-width: 960px) {
   .dashboard-grid,
-  .indicator-panels {
+  .indicator-panels,
+  .analysis-panels {
     grid-template-columns: 1fr;
   }
 
   .instrument-heading {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .instr-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .instr-price-block {
+    width: 100%;
+  }
+
+  .instr-times {
+    border-left: none;
+    border-top: 1px solid #2a3038;
+    padding-left: 0;
+    padding-top: 6px;
+    flex-direction: row;
+    gap: 10px;
+  }
+
+  .quote-card-grid {
+    grid-template-columns: repeat(4, 1fr);
   }
 }
 
@@ -1235,5 +1678,17 @@ a {
 
   .indicator-canvas {
     height: 190px;
+  }
+
+  .quote-card-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .ctrl-input-text {
+    min-width: 140px;
+  }
+
+  .ctrl-input-date {
+    width: 110px;
   }
 }
