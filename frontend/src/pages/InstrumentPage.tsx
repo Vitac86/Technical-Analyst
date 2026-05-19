@@ -4,18 +4,20 @@ import { useParams } from "react-router-dom";
 import { IndicatorPanel } from "../components/charts/IndicatorPanel";
 import { PriceChart } from "../components/charts/PriceChart";
 import { TechnicalSignalsPanel } from "../components/analysis/TechnicalSignalsPanel";
+import { TechnicalLevelsPanel } from "../components/analysis/TechnicalLevelsPanel";
 import { QuoteSummaryCard } from "../components/quotes/QuoteSummaryCard";
 import { getCandles } from "../api/candles";
 import { getIndicatorValues } from "../api/indicators";
 import { searchInstruments } from "../api/instruments";
 import { loadWorkspace } from "../api/workspace";
-import { getTechnicalSignals } from "../api/analysis";
+import { getTechnicalSignals, getTechnicalLevels } from "../api/analysis";
 import { getMoexQuote } from "../api/quotes";
 import type { Candle } from "../types/candle";
 import type { IndicatorValue } from "../types/indicator";
 import type { InstrumentSearchResult } from "../types/instrument";
 import type { LastPriceSummary, WorkspaceLoadResponse } from "../types/workspace";
 import type { TechnicalSignalResponse } from "../types/analysis";
+import type { TechnicalLevelsResponse } from "../types/levels";
 import type { QuoteSnapshot } from "../types/quote";
 
 // ---------------------------------------------------------------------------
@@ -122,6 +124,11 @@ export function InstrumentPage() {
   const [signalsLoading, setSignalsLoading] = useState(false);
   const [signalsError, setSignalsError] = useState<string | null>(null);
 
+  // Levels
+  const [levels, setLevels] = useState<TechnicalLevelsResponse | null>(null);
+  const [levelsLoading, setLevelsLoading] = useState(false);
+  const [levelsError, setLevelsError] = useState<string | null>(null);
+
   // Quote
   const [quote, setQuote] = useState<QuoteSnapshot | null>(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
@@ -220,6 +227,20 @@ export function InstrumentPage() {
     }
   }
 
+  async function reloadLevels(id: number, tf: Timeframe) {
+    setLevelsLoading(true);
+    setLevelsError(null);
+    try {
+      const result = await getTechnicalLevels(id, tf);
+      setLevels(result);
+    } catch (err) {
+      setLevelsError(errorMessage(err, "Failed to load levels."));
+      setLevels(null);
+    } finally {
+      setLevelsLoading(false);
+    }
+  }
+
   async function fetchQuote(src: InstrumentSource) {
     setQuoteLoading(true);
     setQuoteError(null);
@@ -281,7 +302,7 @@ export function InstrumentPage() {
         INDICATOR_NAMES.reduce((n, name) => n + (nextIndicators[name].length), 0),
       );
 
-      await reloadSignals(id, timeframe);
+      await Promise.all([reloadSignals(id, timeframe), reloadLevels(id, timeframe)]);
     } catch (err) {
       setLoadError(errorMessage(err, "Failed to load workspace data."));
     } finally {
@@ -313,7 +334,10 @@ export function InstrumentPage() {
         INDICATOR_NAMES.reduce((n, name) => n + nextIndicators[name].length, 0),
       );
 
-      await reloadSignals(instrumentId, timeframe);
+      await Promise.all([
+        reloadSignals(instrumentId, timeframe),
+        reloadLevels(instrumentId, timeframe),
+      ]);
     } catch (err) {
       setLoadError(errorMessage(err, "Failed to reload indicators."));
     } finally {
@@ -321,10 +345,11 @@ export function InstrumentPage() {
     }
   }
 
-  // Reload signals when timeframe changes and data is already loaded
+  // Reload signals and levels when timeframe changes and data is already loaded
   useEffect(() => {
     if (instrumentId !== null) {
       void reloadSignals(instrumentId, timeframe);
+      void reloadLevels(instrumentId, timeframe);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timeframe, instrumentId]);
@@ -375,7 +400,10 @@ export function InstrumentPage() {
               setIndicatorRowCount(
                 INDICATOR_NAMES.reduce((n, name) => n + nextIndicators[name].length, 0),
               );
-              await reloadSignals(wid, timeframe);
+              await Promise.all([
+                reloadSignals(wid, timeframe),
+                reloadLevels(wid, timeframe),
+              ]);
             } catch (err) {
               setLoadError(errorMessage(err, "Auto-refresh failed."));
             } finally {
@@ -654,6 +682,15 @@ export function InstrumentPage() {
         data={signals}
         loading={signalsLoading}
         error={signalsError}
+      />
+
+      {/* ------------------------------------------------------------------ */}
+      {/* Levels & Targets                                                    */}
+      {/* ------------------------------------------------------------------ */}
+      <TechnicalLevelsPanel
+        data={levels}
+        loading={levelsLoading}
+        error={levelsError}
       />
     </div>
   );

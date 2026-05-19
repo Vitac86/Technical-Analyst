@@ -633,6 +633,157 @@ a {
   padding-top: 10px;
 }
 
+/* ------------------------------------------------------------------ */
+/* Levels & Targets panel                                               */
+/* ------------------------------------------------------------------ */
+
+.lv-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.lv-summary-row {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid #2d3540;
+  border-radius: 6px;
+  background: #1b2028;
+}
+
+.lv-meta-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.lv-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lv-meta-label {
+  color: #97a3b3;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.lv-meta-value {
+  color: #e7ecf2;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.lv-summary {
+  margin: 0;
+  color: #c7d0dc;
+  font-size: 13px;
+  line-height: 1.5;
+  font-style: italic;
+}
+
+.lv-list {
+  display: grid;
+  gap: 8px;
+}
+
+.lv-row {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #2d3540;
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #1b2028;
+}
+
+.lv-row-top {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.lv-row-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.lv-row-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-self: end;
+  white-space: nowrap;
+}
+
+.lv-label {
+  color: #f0f4f8;
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.lv-price {
+  color: #e7ecf2;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.lv-dist {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.lv-dist-pos { color: #31b181; }
+.lv-dist-neg { color: #eb5757; }
+
+.lv-reason {
+  margin: 0;
+  color: #7a8ea3;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* Level kind badges */
+.lv-badge {
+  display: inline-block;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.lv-badge-support     { background: #0d2a3d; color: #56a7e0; border: 1px solid #1a5080; }
+.lv-badge-resistance  { background: #3d2610; color: #f2994a; border: 1px solid #c07020; }
+.lv-badge-target-up   { background: #1a3d2b; color: #31b181; border: 1px solid #27ae60; }
+.lv-badge-target-down { background: #3d1a1a; color: #eb5757; border: 1px solid #c0392b; }
+.lv-badge-stop-zone   { background: #3d1a2a; color: #e05580; border: 1px solid #b03060; }
+.lv-badge-info        { background: #102040; color: #56ccf2; border: 1px solid #2d6a8c; }
+
+.lv-notice {
+  margin: 0;
+  color: #f2994a;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.lv-disclaimer {
+  margin: 0;
+  color: #4a5a6a;
+  font-size: 11px;
+  line-height: 1.5;
+  border-top: 1px solid #2a3038;
+  padding-top: 10px;
+}
+
 @media (max-width: 960px) {
   .dashboard-grid,
   .indicator-panels {
