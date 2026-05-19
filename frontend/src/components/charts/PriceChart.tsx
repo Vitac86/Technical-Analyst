@@ -12,7 +12,6 @@ import {
 import type { Candle } from "../../types/candle";
 import type { IndicatorValue } from "../../types/indicator";
 import type { TechnicalLevel } from "../../types/levels";
-import type { TechnicalSignalItem } from "../../types/analysis";
 import {
   buildCandlestickData,
   buildIndicatorLineData,
@@ -30,7 +29,6 @@ type PriceChartProps = {
   timeframe: string;
   indicators?: PriceChartIndicators;
   levels?: TechnicalLevel[];
-  technicalSignals?: TechnicalSignalItem[];
   loading?: boolean;
   error?: string | null;
 };
@@ -52,7 +50,6 @@ export function PriceChart({
   timeframe,
   indicators,
   levels,
-  technicalSignals,
   loading = false,
   error = null,
 }: PriceChartProps) {
@@ -128,7 +125,12 @@ export function PriceChart({
     if (levels && levels.length > 0 && chartData.candles.length > 0) {
       const seen = new Set<string>();
       for (const level of levels) {
-        if (level.price !== null && ANNOTATED_KINDS.has(level.kind) && !seen.has(level.kind)) {
+        if (
+          level.price != null &&
+          Number.isFinite(level.price) &&
+          ANNOTATED_KINDS.has(level.kind) &&
+          !seen.has(level.kind)
+        ) {
           seen.add(level.kind);
           const style = LEVEL_STYLE[level.kind];
           candleSeries.createPriceLine({
@@ -140,21 +142,6 @@ export function PriceChart({
             title: style.title,
           });
         }
-      }
-    }
-
-    if (technicalSignals && technicalSignals.length > 0 && chartData.candles.length > 0) {
-      const direction = pickSignalDirection(technicalSignals);
-      if (direction !== null) {
-        const latest = chartData.candles[chartData.candles.length - 1];
-        candleSeries.setMarkers([{
-          time: latest.time,
-          position: direction === "buy" ? "belowBar" : "aboveBar",
-          color: direction === "buy" ? "#6fcf97" : "#eb8585",
-          shape: direction === "buy" ? "arrowUp" : "arrowDown",
-          text: direction === "buy" ? "Buy" : "Sell",
-          size: 1,
-        }]);
       }
     }
 
@@ -190,7 +177,7 @@ export function PriceChart({
       resizeObserver.disconnect();
       chart.remove();
     };
-  }, [chartData, error, levels, loading, technicalSignals, timeframe]);
+  }, [chartData, error, levels, loading, timeframe]);
 
   const empty = !loading && !error && chartData.candles.length === 0;
 
@@ -213,17 +200,6 @@ export function PriceChart({
       ) : null}
     </section>
   );
-}
-
-function pickSignalDirection(signals: TechnicalSignalItem[]): "buy" | "sell" | null {
-  const BUY = new Set(["buy", "strong_buy"]);
-  const SELL = new Set(["sell", "strong_sell"]);
-  const macd = signals.find((s) => s.indicator_name === "macd_12_26_9");
-  if (macd) {
-    if (BUY.has(macd.signal)) return "buy";
-    if (SELL.has(macd.signal)) return "sell";
-  }
-  return null;
 }
 
 function addLine(

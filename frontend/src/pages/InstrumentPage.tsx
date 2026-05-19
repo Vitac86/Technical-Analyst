@@ -694,7 +694,6 @@ export function InstrumentPage() {
           bollingerBands: indicators.bollinger_bands_20_2,
         }}
         levels={levels?.levels ?? []}
-        technicalSignals={signals?.signals}
         loading={isUpdating && noData}
         error={null}
       />
