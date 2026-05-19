@@ -157,6 +157,21 @@ interface LoadProgress {
   current: number;
   total: number;
   ticker: string;
+  elapsedMs: number;
+}
+
+// ---------------------------------------------------------------------------
+// Timeout wrapper
+// ---------------------------------------------------------------------------
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Timed out")), ms);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +198,7 @@ export function ScannerPage() {
 
   // --- Runtime state ---
   const [batchRunning, setBatchRunning] = useState(false);
+  const [batchFinalStatus, setBatchFinalStatus] = useState<"done" | "cancelled" | null>(null);
   const [loadProgress, setLoadProgress] = useState<LoadProgress | null>(null);
   const [loadRows, setLoadRows] = useState<LoadRow[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -204,6 +220,9 @@ export function ScannerPage() {
   const autoScanRan = useRef(false);
   const autoFlowRunning = useRef(false);
   const lastAutoLoadKey = useRef("");
+  const cancelRef = useRef(false);
+  const batchStartRef = useRef<number>(0);
+  const mountedRef = useRef(true);
 
   // Sync refs after every render (cheap assignments, ensures closures see fresh values)
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -223,6 +242,9 @@ export function ScannerPage() {
   useEffect(() => { lsSet(LS.end, endDate); }, [endDate]);
   useEffect(() => { lsSet(LS.autoLoad, autoLoadEnabled); }, [autoLoadEnabled]);
   useEffect(() => { lsSet(LS.autoRefreshInterval, autoRefreshMinutes); }, [autoRefreshMinutes]);
+
+  // Cleanup flag — prevents setState after unmount
+  useEffect(() => { return () => { mountedRef.current = false; }; }, []);
 
   // Reset auto-load key when inputs change so auto-load re-checks on next flow
   useEffect(() => {
@@ -262,25 +284,40 @@ export function ScannerPage() {
     start: string,
     end: string,
   ): Promise<void> => {
+    cancelRef.current = false;
+    batchStartRef.current = Date.now();
+    setBatchFinalStatus(null);
     setBatchRunning(true);
     setLoadError(null);
     setLoadRows([]);
 
     const rows: LoadRow[] = [];
+    let wasCancelled = false;
+
     for (let i = 0; i < toLoad.length; i++) {
+      if (cancelRef.current) {
+        wasCancelled = true;
+        break;
+      }
       const inst = toLoad[i];
-      setLoadProgress({ current: i + 1, total: toLoad.length, ticker: inst.ticker });
+      const elapsedMs = Date.now() - batchStartRef.current;
+      if (mountedRef.current) {
+        setLoadProgress({ current: i + 1, total: toLoad.length, ticker: inst.ticker, elapsedMs });
+      }
       try {
-        await loadWorkspace({
-          ticker: inst.ticker,
-          engine: inst.engine,
-          market: inst.market,
-          board: inst.board,
-          timeframe: tf,
-          start,
-          end,
-          calculate_indicators: true,
-        });
+        await withTimeout(
+          loadWorkspace({
+            ticker: inst.ticker,
+            engine: inst.engine,
+            market: inst.market,
+            board: inst.board,
+            timeframe: tf,
+            start,
+            end,
+            calculate_indicators: true,
+          }),
+          60_000,
+        );
         rows.push({ ticker: inst.ticker, status: "success", message: "Loaded" });
       } catch (err) {
         rows.push({
@@ -289,10 +326,12 @@ export function ScannerPage() {
           message: err instanceof Error ? err.message : "Request failed",
         });
       }
-      setLoadRows([...rows]);
+      if (mountedRef.current) setLoadRows([...rows]);
     }
 
+    if (!mountedRef.current) return;
     setLoadProgress(null);
+    setBatchFinalStatus(wasCancelled ? "cancelled" : "done");
     setBatchRunning(false);
     setLastLoadTime(new Date());
   }, []);
@@ -533,6 +572,15 @@ export function ScannerPage() {
             <button className="btn btn-secondary" onClick={handleScanOnly} disabled={busy}>
               {scanning ? "Scanning…" : "Scan now"}
             </button>
+            {batchRunning ? (
+              <button
+                className="btn btn-secondary"
+                onClick={() => { cancelRef.current = true; }}
+                title="Skip remaining tickers and finish batch"
+              >
+                Stop batch
+              </button>
+            ) : null}
           </div>
         </div>
       </div>
@@ -575,9 +623,11 @@ export function ScannerPage() {
             {loadProgress !== null ? (
               <span className="scanner-load-progress">
                 {loadProgress.current} / {loadProgress.total} — {loadProgress.ticker}
+                {" "}({Math.floor(loadProgress.elapsedMs / 1000)}s)
               </span>
             ) : (
               <span className="scanner-load-done">
+                {batchFinalStatus === "cancelled" ? "Cancelled · " : ""}
                 {loadRows.filter((r) => r.status === "success").length} /{" "}
                 {loadRows.length} succeeded
               </span>

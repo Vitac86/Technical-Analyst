@@ -247,6 +247,12 @@ a {
   background: #2a171d;
 }
 
+.chart-state-warn {
+  border-color: #7a6020;
+  color: #f5e6a0;
+  background: #252010;
+}
+
 .chart-canvas {
   overflow: hidden;
   border: 1px solid #2a3038;

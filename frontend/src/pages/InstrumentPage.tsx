@@ -223,6 +223,7 @@ export function InstrumentPage() {
   // ── UI ───────────────────────────────────────────────────────────────────
   const [isUpdating, setIsUpdating] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [staleWarning, setStaleWarning] = useState<string | null>(null);
 
   // ── Stable refs (for polling closures) ──────────────────────────────────
   const sourceRef = useRef(source);
@@ -239,8 +240,23 @@ export function InstrumentPage() {
   const isWorkspaceLoadingRef = useRef(false);
   const isQuoteLoadingRef = useRef(false);
   const initDoneRef = useRef(false);
+  const workspaceGenRef = useRef(0);
 
   // ── Core async functions ─────────────────────────────────────────────────
+
+  function clearChartData() {
+    setCandles([]);
+    setCandleCount(0);
+    setIndicators(createEmptyIndicators());
+    setSignals(null);
+    setSignalsError(null);
+    setLevels(null);
+    setLevelsError(null);
+    setLastWorkspace(null);
+    setLastPrice(null);
+    setLoadError(null);
+    setStaleWarning(null);
+  }
 
   async function reloadSignals(id: number, tf: Timeframe) {
     setSignalsLoading(true);
@@ -291,9 +307,13 @@ export function InstrumentPage() {
     end?: string,
   ) {
     if (isWorkspaceLoadingRef.current) return;
+
+    workspaceGenRef.current += 1;
+    const myGen = workspaceGenRef.current;
     isWorkspaceLoadingRef.current = true;
     setIsUpdating(true);
     setLoadError(null);
+    setStaleWarning(null);
 
     const useSrc = src ?? sourceRef.current;
     const useTf = tf ?? timeframeRef.current;
@@ -312,16 +332,25 @@ export function InstrumentPage() {
         calculate_indicators: true,
       });
 
+      // Ignore result if source changed while request was in flight
+      if (myGen !== workspaceGenRef.current) return;
+      if (ws.instrument.ticker.toUpperCase() !== useSrc.ticker.toUpperCase()) {
+        setStaleWarning(`Ignored stale workspace response for ${ws.instrument.ticker}.`);
+        return;
+      }
+
       setLastWorkspace(ws);
       setLastPrice(ws.last_price);
       const id = ws.instrument.id;
       setLastCandleSyncTime(new Date());
 
+      if (myGen !== workspaceGenRef.current) return;
       const [nextCandles, ...indicatorRows] = await Promise.all([
         getCandles(id, useTf),
         ...INDICATOR_NAMES.map((name) => getIndicatorValues(id, name, useTf)),
       ]);
 
+      if (myGen !== workspaceGenRef.current) return;
       setCandles(nextCandles);
       setCandleCount(nextCandles.length);
       setIndicators(
@@ -332,6 +361,7 @@ export function InstrumentPage() {
 
       await Promise.all([reloadSignals(id, useTf), reloadLevels(id, useTf)]);
     } catch (err) {
+      if (myGen !== workspaceGenRef.current) return;
       const msg = errorMessage(err, "Failed to load workspace data.");
       setLoadError(
         msg.toLowerCase().includes("no candle") || msg.toLowerCase().includes("no data")
@@ -339,8 +369,10 @@ export function InstrumentPage() {
           : msg,
       );
     } finally {
-      isWorkspaceLoadingRef.current = false;
-      setIsUpdating(false);
+      if (myGen === workspaceGenRef.current) {
+        isWorkspaceLoadingRef.current = false;
+        setIsUpdating(false);
+      }
     }
   }
 
@@ -358,6 +390,9 @@ export function InstrumentPage() {
     if (!routeTicker || !initDoneRef.current) return;
     const upper = routeTicker.toUpperCase();
     if (upper === sourceRef.current.ticker) return;
+    workspaceGenRef.current += 1;
+    isWorkspaceLoadingRef.current = false;
+    clearChartData();
     const newSrc = { ...sourceRef.current, ticker: upper };
     setSource(newSrc);
     setSearchQuery(upper);
@@ -463,6 +498,10 @@ export function InstrumentPage() {
       market: result.market ?? "shares",
       board: result.board ?? "TQBR",
     };
+    // Invalidate any in-flight workspace load for previous instrument
+    workspaceGenRef.current += 1;
+    isWorkspaceLoadingRef.current = false;
+    clearChartData();
     setSource(newSrc);
     setSearchQuery(result.ticker);
     setSearchOpen(false);
@@ -473,6 +512,10 @@ export function InstrumentPage() {
 
   function handleTimeframeChange(tf: Timeframe) {
     if (tf === timeframeRef.current) return;
+    // Invalidate any in-flight workspace load for previous timeframe
+    workspaceGenRef.current += 1;
+    isWorkspaceLoadingRef.current = false;
+    clearChartData();
     setTimeframe(tf);
     const newStart = defaultStartDate(tf);
     setStartDate(newStart);
@@ -502,6 +545,22 @@ export function InstrumentPage() {
   const noData = candles.length === 0;
 
   const overlays: ChartOverlays = { showSma, showEma, showBollinger, showLevels, showVolume };
+
+  const latestCandle = candles.length > 0 ? candles[candles.length - 1] : null;
+  const latestCandleTs = latestCandle
+    ? latestCandle.timestamp.slice(0, 16).replace("T", " ")
+    : "—";
+
+  const quoteMismatchPct = (() => {
+    if (!quote?.last_price || !latestCandle?.close) return null;
+    const qp = quote.last_price;
+    const cp = Number(latestCandle.close);
+    if (!cp) return null;
+    const isCurrency = source.engine === "currency" || source.market === "selt";
+    const threshold = isCurrency ? 0.01 : 0.03;
+    const diff = Math.abs(qp - cp) / cp;
+    return diff > threshold ? diff : null;
+  })();
 
   // ── Render ───────────────────────────────────────────────────────────────
 
@@ -689,10 +748,22 @@ export function InstrumentPage() {
         {candleCount > 0 ? (
           <span className="status-item">{candleCount} candles · {timeframe}</span>
         ) : null}
+        <span className="status-item">Latest candle: {latestCandleTs}</span>
         {loadError !== null ? (
           <span className="status-error" title={loadError}>{loadError}</span>
         ) : null}
       </div>
+
+      {/* Compact warnings */}
+      {staleWarning !== null ? (
+        <div className="chart-state chart-state-warn">{staleWarning}</div>
+      ) : null}
+      {quoteMismatchPct !== null ? (
+        <div className="chart-state chart-state-warn">
+          Quote differs from latest stored candle ({(quoteMismatchPct * 100).toFixed(1)}%).
+          Data may be stale or source may differ.
+        </div>
+      ) : null}
 
       {/* 4 ─ Price chart — higher on the page */}
       <PriceChart
