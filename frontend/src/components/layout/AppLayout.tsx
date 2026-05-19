@@ -16,6 +16,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         <nav className="top-nav" aria-label="Main navigation">
           <NavLink to="/">Dashboard</NavLink>
           <NavLink to="/chart">Chart</NavLink>
+          <NavLink to="/scanner">Scanner</NavLink>
         </nav>
       </header>
       <main className="app-main">{children}</main>
