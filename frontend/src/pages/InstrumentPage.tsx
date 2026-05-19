@@ -693,6 +693,8 @@ export function InstrumentPage() {
           ema20: indicators.ema_20,
           bollingerBands: indicators.bollinger_bands_20_2,
         }}
+        levels={levels?.levels ?? []}
+        technicalSignals={signals?.signals}
         loading={isUpdating && noData}
         error={null}
       />
