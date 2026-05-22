@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Technical Analyst</string>
+    <string name="title_activity_main">Technical Analyst</string>
+    <string name="package_name">com.vitac86.technicalanalyst</string>
+    <string name="custom_url_scheme">com.vitac86.technicalanalyst</string>
+</resources>

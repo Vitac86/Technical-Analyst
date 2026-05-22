@@ -1,0 +1,397 @@
+/* =========================================================
+   Mobile chart page — standalone styles
+   Used only by MobileChartPage / MobilePriceChart.
+   ========================================================= */
+
+:root {
+  --mc-bg: #0f1115;
+  --mc-surface: #171b22;
+  --mc-border: #2a3038;
+  --mc-text: #e7ecf2;
+  --mc-muted: #97a3b3;
+  --mc-dim: #7a8ea3;
+  --mc-accent: #3b82f6;
+  --mc-green: #31b181;
+  --mc-red: #eb5757;
+  --mc-chip-bg: #1e2530;
+  --mc-chip-active-bg: #213145;
+  --mc-chip-active-border: #3b82f6;
+  --mc-chip-active-color: #a9d8ff;
+}
+
+/* ── Page shell ──────────────────────────────────────────────────────────── */
+
+.mc-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  min-height: 100vh; /* fallback */
+  background: var(--mc-bg);
+  color: var(--mc-text);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 14px;
+  /* Android safe-area insets */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+/* Prevent double-tap zoom on interactive elements */
+.mc-page button,
+.mc-page input {
+  touch-action: manipulation;
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+
+.mc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--mc-surface);
+  border-bottom: 1px solid var(--mc-border);
+  padding: 10px 14px;
+  flex-shrink: 0;
+}
+
+.mc-header-left {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.mc-app-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--mc-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.mc-ticker {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--mc-text);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mc-header-right {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.mc-source-chip {
+  border: 1px solid #2a4870;
+  border-radius: 4px;
+  background: #1a2840;
+  color: #6baed6;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 3px 6px;
+  white-space: nowrap;
+  font-family: ui-monospace, monospace;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mc-tf-chip {
+  border: 1px solid #344a60;
+  border-radius: 4px;
+  background: #192430;
+  color: #6baed6;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 7px;
+  white-space: nowrap;
+  font-family: ui-monospace, monospace;
+}
+
+/* ── Search ──────────────────────────────────────────────────────────────── */
+
+.mc-search-section {
+  position: relative;
+  padding: 10px 14px 0;
+  flex-shrink: 0;
+}
+
+.mc-search-row {
+  position: relative;
+}
+
+.mc-search-input {
+  width: 100%;
+  border: 1px solid var(--mc-border);
+  border-radius: 8px;
+  background: #151922;
+  color: var(--mc-text);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  padding: 11px 14px;
+  -webkit-appearance: none;
+  appearance: none;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.mc-search-input:focus {
+  border-color: var(--mc-accent);
+}
+
+.mc-search-input::placeholder {
+  color: var(--mc-dim);
+}
+
+/* Hide the native clear button on search inputs */
+.mc-search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.mc-search-spinner {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--mc-muted);
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.mc-search-dropdown {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 14px;
+  right: 14px;
+  z-index: 200;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  border: 1px solid #344050;
+  border-radius: 8px;
+  background: #1b2028;
+  max-height: 260px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+
+.mc-search-dropdown li {
+  display: grid;
+  grid-template-columns: 70px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  border-bottom: 1px solid #1e2530;
+}
+
+.mc-search-dropdown li:last-child {
+  border-bottom: none;
+}
+
+.mc-search-dropdown li:active {
+  background: #252e3c;
+}
+
+.mc-sr-ticker {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--mc-text);
+  white-space: nowrap;
+}
+
+.mc-sr-name {
+  font-size: 12px;
+  color: #c7d0dc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-sr-meta {
+  font-size: 10px;
+  color: var(--mc-dim);
+  white-space: nowrap;
+  font-family: ui-monospace, monospace;
+}
+
+/* ── Controls (timeframe + date presets) ─────────────────────────────────── */
+
+.mc-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+  flex-shrink: 0;
+}
+
+.mc-chip-row {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.mc-chip {
+  border: 1px solid var(--mc-border);
+  border-radius: 6px;
+  background: var(--mc-chip-bg);
+  color: var(--mc-muted);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 7px 13px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+  white-space: nowrap;
+  min-width: 44px;
+  text-align: center;
+  flex: 1 0 auto;
+}
+
+.mc-chip:active {
+  opacity: 0.8;
+}
+
+.mc-chip-sm {
+  font-size: 11px;
+  padding: 5px 10px;
+}
+
+.mc-chip-active {
+  background: var(--mc-chip-active-bg);
+  border-color: var(--mc-chip-active-border);
+  color: var(--mc-chip-active-color);
+}
+
+/* ── Chart area ──────────────────────────────────────────────────────────── */
+
+.mc-chart-area {
+  flex: 1;
+  min-height: 0;
+  padding: 8px 14px 0;
+}
+
+.mc-chart-canvas {
+  width: 100%;
+  height: 62vh;
+  min-height: 280px;
+  max-height: 640px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--mc-border);
+}
+
+/* ── Loading / error / empty states ─────────────────────────────────────── */
+
+.mc-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  height: 62vh;
+  min-height: 260px;
+  text-align: center;
+  padding: 24px;
+}
+
+.mc-state-loading {
+  color: var(--mc-muted);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.mc-spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid var(--mc-border);
+  border-top-color: var(--mc-accent);
+  border-radius: 50%;
+  animation: mc-spin 0.75s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes mc-spin {
+  to { transform: rotate(360deg); }
+}
+
+.mc-state-error {
+  color: #f0b0b8;
+}
+
+.mc-state-error p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  max-width: 280px;
+}
+
+.mc-retry-btn {
+  border: 1px solid #9b3a45;
+  border-radius: 8px;
+  background: #2a171d;
+  color: #ffd8de;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 11px 28px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mc-retry-btn:active {
+  opacity: 0.8;
+}
+
+.mc-state-empty {
+  color: var(--mc-dim);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+/* ── Footer status line ──────────────────────────────────────────────────── */
+
+.mc-footer {
+  flex-shrink: 0;
+  padding: 6px 14px 10px;
+  font-size: 11px;
+  color: var(--mc-dim);
+  font-family: ui-monospace, monospace;
+  font-weight: 600;
+  border-top: 1px solid var(--mc-border);
+  margin-top: 6px;
+}
+
+/* ── Narrow screen safety (360 px min) ──────────────────────────────────── */
+
+@media (max-width: 400px) {
+  .mc-chip {
+    font-size: 12px;
+    padding: 6px 10px;
+    min-width: 38px;
+  }
+
+  .mc-ticker {
+    font-size: 16px;
+  }
+
+  .mc-source-chip {
+    display: none; /* hide on very small screens to save space */
+  }
+}
