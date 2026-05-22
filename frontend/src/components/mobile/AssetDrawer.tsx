@@ -3,6 +3,16 @@ import { searchMoex } from '../../api/moexDirect';
 import type { MoexSearchResult } from '../../api/moexDirect';
 import { makeAssetId } from '../../utils/mobileWatchlist';
 import type { WatchlistAsset } from '../../utils/mobileWatchlist';
+import { checkForAppUpdate, CURRENT_APP_VERSION_NAME } from '../../api/appUpdate';
+import type { AppUpdateManifest } from '../../api/appUpdate';
+
+type UpdatePhase =
+  | { phase: 'idle' }
+  | { phase: 'checking' }
+  | { phase: 'up_to_date' }
+  | { phase: 'update_available'; manifest: AppUpdateManifest }
+  | { phase: 'unsupported'; manifest: AppUpdateManifest }
+  | { phase: 'error'; message: string };
 
 type Props = {
   open: boolean;
@@ -22,6 +32,7 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
   const [dupMsg,         setDupMsg]         = useState(false);
   const [aliasId,        setAliasId]        = useState<string | null>(null);
   const [aliasValue,     setAliasValue]     = useState('');
+  const [updateState,    setUpdateState]    = useState<UpdatePhase>({ phase: 'idle' });
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Reset local UI state after drawer closes (after slide-out animation)
@@ -103,6 +114,30 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
       watchlist.map(a => a.id === id ? { ...a, alias: aliasValue.trim() || undefined } : a),
     );
     setAliasId(null);
+  }
+
+  async function handleCheckUpdate() {
+    setUpdateState({ phase: 'checking' });
+    try {
+      const result = await checkForAppUpdate();
+      if (result.status === 'up_to_date') {
+        setUpdateState({ phase: 'up_to_date' });
+      } else if (result.status === 'update_available') {
+        setUpdateState({ phase: 'update_available', manifest: result.manifest });
+      } else {
+        setUpdateState({ phase: 'unsupported', manifest: result.manifest });
+      }
+    } catch (err) {
+      setUpdateState({
+        phase: 'error',
+        message: err instanceof Error ? err.message : 'Update check failed',
+      });
+    }
+  }
+
+  function openApkUrl(url: string) {
+    const opened = window.open(url, '_system');
+    if (!opened) window.location.href = url;
   }
 
   return (
@@ -278,6 +313,53 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
                 </div>
               );
             })
+          )}
+        </div>
+
+        {/* ── Update section ──────────────────────────────────────────── */}
+        <div className="mc-update-section">
+          <div className="mc-update-version">v{CURRENT_APP_VERSION_NAME}</div>
+          {updateState.phase === 'idle' && (
+            <button type="button" className="mc-update-check-btn" onClick={handleCheckUpdate}>
+              Check update
+            </button>
+          )}
+          {updateState.phase === 'checking' && (
+            <span className="mc-update-status-text">Checking…</span>
+          )}
+          {updateState.phase === 'up_to_date' && (
+            <span className="mc-update-status-text mc-update-ok">App is up to date</span>
+          )}
+          {updateState.phase === 'update_available' && (
+            <div className="mc-update-available">
+              <div className="mc-update-info">Update available: v{updateState.manifest.versionName}</div>
+              {updateState.manifest.notes && updateState.manifest.notes.length > 0 && (
+                <ul className="mc-update-notes">
+                  {updateState.manifest.notes.map((note, i) => (
+                    <li key={i}>{note}</li>
+                  ))}
+                </ul>
+              )}
+              <button type="button" className="mc-update-download-btn" onClick={() => openApkUrl(updateState.manifest.apkUrl)}>
+                Download APK
+              </button>
+            </div>
+          )}
+          {updateState.phase === 'unsupported' && (
+            <div className="mc-update-available">
+              <div className="mc-update-unsupported">This version is no longer supported</div>
+              <button type="button" className="mc-update-download-btn" onClick={() => openApkUrl(updateState.manifest.apkUrl)}>
+                Download APK
+              </button>
+            </div>
+          )}
+          {updateState.phase === 'error' && (
+            <div className="mc-update-error-row">
+              <span className="mc-update-error">{updateState.message}</span>
+              <button type="button" className="mc-update-check-btn" onClick={handleCheckUpdate}>
+                Retry
+              </button>
+            </div>
           )}
         </div>
       </div>
