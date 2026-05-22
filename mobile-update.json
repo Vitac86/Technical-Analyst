@@ -1,9 +1,11 @@
 {
-  "versionCode": 1,
-  "versionName": "1.0.0",
-  "apkUrl": "https://github.com/Vitac86/Technical-Analyst/releases/latest",
+  "versionCode": 2,
+  "versionName": "1.0.1",
+  "apkUrl": "https://github.com/Vitac86/Technical-Analyst/releases/download/v1.0.1/technical-analyst-v1.0.1.apk",
   "releaseDate": "2026-05-22",
   "notes": [
-    "Initial Android APK build"
+    "Added manual app update checker",
+    "Added editable asset drawer/watchlist",
+    "Improved mobile APK workflow"
   ]
 }
