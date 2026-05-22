@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { MobilePriceChart } from '../components/mobile/MobilePriceChart';
+import { AssetDrawer }      from '../components/mobile/AssetDrawer';
 import { loadMoexCandles, searchMoex } from '../api/moexDirect';
 import type { MoexCandle, MoexSearchResult, MoexSource } from '../api/moexDirect';
+import { loadWatchlist, makeAssetId, saveWatchlist } from '../utils/mobileWatchlist';
+import type { WatchlistAsset } from '../utils/mobileWatchlist';
 import '../styles/mobile.css';
 
 // ---------------------------------------------------------------------------
@@ -15,7 +18,6 @@ type Timeframe = (typeof TIMEFRAMES)[number];
 const DATE_PRESETS = ['1W', '1M', '3M', '6M', '1Y'] as const;
 type DatePreset = (typeof DATE_PRESETS)[number];
 
-// Default date preset per timeframe (balances data volume vs usefulness)
 const DEFAULT_PRESET: Record<Timeframe, DatePreset> = {
   '5m':  '1W',
   '15m': '1M',
@@ -58,7 +60,7 @@ function fromDate(preset: DatePreset): string {
 }
 
 // ---------------------------------------------------------------------------
-// State initializers (read persisted preferences)
+// State initializers
 // ---------------------------------------------------------------------------
 
 function initSource(): MoexSource {
@@ -96,9 +98,12 @@ export function MobileChartPage() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchOpen,    setSearchOpen]    = useState(false);
 
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [watchlist,  setWatchlist]  = useState<WatchlistAsset[]>(loadWatchlist);
+
   const debounceRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchBoxRef = useRef<HTMLDivElement | null>(null);
-  const loadGenRef   = useRef(0); // generation counter — cancels stale loads
+  const loadGenRef   = useRef(0);
 
   // ── Candle loading ────────────────────────────────────────────────────────
 
@@ -112,7 +117,7 @@ export function MobileChartPage() {
 
     try {
       const data = await loadMoexCandles(src, tf, fromDate(preset), today());
-      if (gen !== loadGenRef.current) return; // superseded by a newer load
+      if (gen !== loadGenRef.current) return;
       setCandles(data);
     } catch (err) {
       if (gen !== loadGenRef.current) return;
@@ -122,13 +127,12 @@ export function MobileChartPage() {
     }
   }
 
-  // Initial load on mount
   useEffect(() => {
     void loadCandles(source, timeframe, datePreset);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Persist small UI preferences to localStorage ─────────────────────────
+  // ── Persist small UI preferences ─────────────────────────────────────────
 
   useEffect(() => {
     lsSet('ticker', source.ticker);
@@ -139,7 +143,7 @@ export function MobileChartPage() {
   useEffect(() => { lsSet('timeframe',  timeframe);  }, [timeframe]);
   useEffect(() => { lsSet('datePreset', datePreset); }, [datePreset]);
 
-  // ── Search ────────────────────────────────────────────────────────────────
+  // ── Header search ─────────────────────────────────────────────────────────
 
   const triggerSearch = useCallback((q: string) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -182,7 +186,25 @@ export function MobileChartPage() {
     void loadCandles(newSrc, timeframe, datePreset);
   }
 
-  // ── Timeframe / preset changes ────────────────────────────────────────────
+  // ── Drawer: asset selection ───────────────────────────────────────────────
+
+  function handleSelectFromDrawer(asset: WatchlistAsset) {
+    const newSrc: MoexSource = {
+      ticker: asset.ticker,
+      engine: asset.engine,
+      market: asset.market,
+      board:  asset.board,
+    };
+    setSource(newSrc);
+    void loadCandles(newSrc, timeframe, datePreset);
+  }
+
+  function handleWatchlistChange(list: WatchlistAsset[]) {
+    setWatchlist(list);
+    saveWatchlist(list);
+  }
+
+  // ── Timeframe / preset ───────────────────────────────────────────────────
 
   function handleTimeframeChange(tf: Timeframe) {
     if (tf === timeframe) return;
@@ -202,7 +224,7 @@ export function MobileChartPage() {
     void loadCandles(source, timeframe, datePreset);
   }
 
-  // Close dropdown on outside tap
+  // Close header search dropdown on outside tap
   useEffect(() => {
     function onPointerDown(e: PointerEvent) {
       if (searchBoxRef.current && !searchBoxRef.current.contains(e.target as Node)) {
@@ -215,18 +237,36 @@ export function MobileChartPage() {
 
   // ── Derived ───────────────────────────────────────────────────────────────
 
-  const hasData = candles.length > 0;
-  const noData  = !hasData && !loading && !error;
+  const hasData    = candles.length > 0;
+  const noData     = !hasData && !loading && !error;
+  const selectedId = makeAssetId(source.engine, source.market, source.board, source.ticker);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="mc-page">
 
+      {/* ── Asset drawer ────────────────────────────────────────────── */}
+      <AssetDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        watchlist={watchlist}
+        selectedId={selectedId}
+        onSelect={handleSelectFromDrawer}
+        onWatchlistChange={handleWatchlistChange}
+      />
+
       {/* ── Header ──────────────────────────────────────────────────── */}
       <header className="mc-header">
+        <button
+          type="button"
+          className="mc-hamburger"
+          onClick={() => setDrawerOpen(true)}
+          aria-label="Open asset list"
+        >
+          <span /><span /><span />
+        </button>
         <div className="mc-header-left">
-          <span className="mc-app-title">TA</span>
           <span className="mc-ticker">{source.ticker}</span>
         </div>
         <div className="mc-header-right">

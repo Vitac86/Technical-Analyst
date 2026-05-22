@@ -378,6 +378,410 @@
   margin-top: 6px;
 }
 
+/* ── Hamburger menu button ───────────────────────────────────────────────── */
+
+.mc-hamburger {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 8px 10px 8px 4px;
+  margin-left: -4px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.mc-hamburger span {
+  display: block;
+  width: 20px;
+  height: 2px;
+  background: var(--mc-muted);
+  border-radius: 2px;
+  transition: background 0.15s;
+}
+
+.mc-hamburger:active span {
+  background: var(--mc-text);
+}
+
+/* ── Asset drawer overlay ────────────────────────────────────────────────── */
+
+.mc-drawer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: rgba(0, 0, 0, 0);
+  pointer-events: none;
+  transition: background 0.25s ease;
+}
+
+.mc-drawer-overlay-on {
+  background: rgba(0, 0, 0, 0.62);
+  pointer-events: auto;
+}
+
+/* ── Asset drawer panel ──────────────────────────────────────────────────── */
+
+.mc-drawer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 310;
+  width: 82vw;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  background: var(--mc-surface);
+  border-right: 1px solid var(--mc-border);
+  transform: translateX(-100%);
+  transition: transform 0.25s ease;
+  will-change: transform;
+  /* safe-area: left notch on some devices */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  overflow: hidden;
+}
+
+.mc-drawer-open {
+  transform: translateX(0);
+}
+
+/* ── Drawer header ───────────────────────────────────────────────────────── */
+
+.mc-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 14px 12px;
+  border-bottom: 1px solid var(--mc-border);
+  flex-shrink: 0;
+}
+
+.mc-drawer-title {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--mc-text);
+  line-height: 1.2;
+}
+
+.mc-drawer-subtitle {
+  font-size: 11px;
+  color: var(--mc-dim);
+  margin-top: 2px;
+}
+
+.mc-drawer-header-btns {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.mc-dh-btn {
+  border: 1px solid var(--mc-border);
+  border-radius: 6px;
+  background: var(--mc-chip-bg);
+  color: var(--mc-muted);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  white-space: nowrap;
+}
+
+.mc-dh-btn:active {
+  opacity: 0.75;
+}
+
+.mc-dh-done {
+  border-color: var(--mc-chip-active-border);
+  background: var(--mc-chip-active-bg);
+  color: var(--mc-chip-active-color);
+}
+
+/* ── Inline search inside drawer ─────────────────────────────────────────── */
+
+.mc-drawer-search {
+  flex-shrink: 0;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--mc-border);
+  background: #13171e;
+}
+
+.mc-drawer-search-row {
+  position: relative;
+}
+
+.mc-drawer-search-input {
+  width: 100%;
+  border: 1px solid var(--mc-border);
+  border-radius: 7px;
+  background: #151922;
+  color: var(--mc-text);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 9px 12px;
+  box-sizing: border-box;
+  -webkit-appearance: none;
+  appearance: none;
+  outline: none;
+  touch-action: manipulation;
+}
+
+.mc-drawer-search-input:focus {
+  border-color: var(--mc-accent);
+}
+
+.mc-drawer-search-input::placeholder {
+  color: var(--mc-dim);
+}
+
+.mc-drawer-search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.mc-drawer-search-spin {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--mc-muted);
+  font-size: 14px;
+  pointer-events: none;
+}
+
+.mc-drawer-dup-msg {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #f0b0b8;
+  font-weight: 600;
+}
+
+.mc-drawer-search-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid #344050;
+  border-radius: 7px;
+  background: #1b2028;
+}
+
+.mc-drawer-search-list li {
+  display: grid;
+  grid-template-columns: 80px 1fr auto;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid #1e2530;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.mc-drawer-search-list li:last-child {
+  border-bottom: none;
+}
+
+.mc-drawer-search-list li:active {
+  background: #252e3c;
+}
+
+.mc-dsr-ticker {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--mc-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mc-dsr-name {
+  font-size: 11px;
+  color: #c7d0dc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-dsr-meta {
+  font-size: 9px;
+  color: var(--mc-dim);
+  font-family: ui-monospace, monospace;
+  white-space: nowrap;
+}
+
+/* ── Watchlist ───────────────────────────────────────────────────────────── */
+
+.mc-drawer-list {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.mc-drawer-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 40px 20px;
+  color: var(--mc-dim);
+  font-size: 14px;
+  text-align: center;
+}
+
+.mc-drawer-empty p {
+  margin: 0;
+}
+
+/* ── Watchlist item ──────────────────────────────────────────────────────── */
+
+.mc-drawer-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #1e2530;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: background 0.1s;
+}
+
+.mc-drawer-item:last-child {
+  border-bottom: none;
+}
+
+.mc-drawer-item:active:not(.mc-drawer-item-edit) {
+  background: #1e2530;
+}
+
+.mc-drawer-item-sel {
+  background: #1a2840;
+  border-left: 3px solid var(--mc-accent);
+  padding-left: 11px; /* compensate for the border-left */
+}
+
+.mc-drawer-item-edit {
+  cursor: default;
+}
+
+.mc-drawer-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.mc-drawer-item-ticker {
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--mc-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mc-drawer-item-sel .mc-drawer-item-ticker {
+  color: var(--mc-chip-active-color);
+}
+
+.mc-drawer-item-name {
+  font-size: 11px;
+  color: #c7d0dc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mc-drawer-item-meta {
+  font-size: 9px;
+  color: var(--mc-dim);
+  font-family: ui-monospace, monospace;
+  white-space: nowrap;
+}
+
+/* ── Alias inline input ──────────────────────────────────────────────────── */
+
+.mc-drawer-alias-input {
+  width: 100%;
+  border: 1px solid var(--mc-accent);
+  border-radius: 5px;
+  background: #151922;
+  color: var(--mc-text);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 5px 8px;
+  box-sizing: border-box;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* ── Edit mode controls ──────────────────────────────────────────────────── */
+
+.mc-drawer-edit-row {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.mc-edit-btn {
+  min-width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  border: 1px solid var(--mc-border);
+  background: #1e2530;
+  color: var(--mc-muted);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+}
+
+.mc-edit-btn:active {
+  opacity: 0.7;
+}
+
+.mc-edit-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.mc-edit-del {
+  border-color: #9b3a45;
+  background: #2a171d;
+  color: #ffa0ad;
+}
+
+.mc-edit-alias {
+  font-size: 10px;
+  letter-spacing: -0.02em;
+}
+
 /* ── Narrow screen safety (360 px min) ──────────────────────────────────── */
 
 @media (max-width: 400px) {
@@ -393,5 +797,11 @@
 
   .mc-source-chip {
     display: none; /* hide on very small screens to save space */
+  }
+
+  .mc-edit-btn {
+    min-width: 32px;
+    height: 34px;
+    font-size: 12px;
   }
 }
