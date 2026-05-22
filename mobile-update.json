@@ -1,11 +1,12 @@
 {
-  "versionCode": 3,
-  "versionName": "1.0.2",
-  "apkUrl": "https://github.com/Vitac86/Technical-Analyst/releases/download/v1.0.2/technical-analyst-v1.0.2.apk",
+  "versionCode": 4,
+  "versionName": "1.0.3",
+  "apkUrl": "https://github.com/Vitac86/Technical-Analyst/releases/download/v1.0.3/technical-analyst-v1.0.3.apk",
   "releaseDate": "2026-05-22",
   "notes": [
-    "Added live chart updates",
-    "Improved mobile chart UI",
-    "Improved asset drawer layout"
+    "Fixed live chart updates",
+    "Fixed 5m chart blank/black screen issue",
+    "Reduced chart jumping during live refresh",
+    "Improved timeframe consistency"
   ]
 }

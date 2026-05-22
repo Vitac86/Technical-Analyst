@@ -231,6 +231,69 @@ export async function loadMoexCandles(
 }
 
 // ---------------------------------------------------------------------------
+// Lightweight candle fetch for live polling — single page, minimal time window.
+// Returns [] for '1d' (no sub-minute polling needed for daily timeframe).
+// ---------------------------------------------------------------------------
+
+const LIVE_LOOKBACK_DAYS: Record<string, number> = {
+  '5m':  1,
+  '15m': 1,
+  '1h':  3,
+  '4h':  7,
+};
+
+export async function loadMoexRecentCandles(
+  src: MoexSource,
+  timeframe: string,
+  signal?: AbortSignal,
+): Promise<MoexCandle[]> {
+  if (timeframe === '1d') return [];
+
+  const cfg = TF_CONFIG[timeframe];
+  if (!cfg) return [];
+
+  const lookback = LIVE_LOOKBACK_DAYS[timeframe] ?? 1;
+  const fromD = new Date();
+  fromD.setDate(fromD.getDate() - lookback);
+  const fromStr = fromD.toISOString().slice(0, 10);
+  const tillStr = new Date().toISOString().slice(0, 10);
+
+  const url = new URL(
+    `${MOEX_ISS}/engines/${src.engine}/markets/${src.market}/boards/${src.board}/securities/${src.ticker}/candles.json`,
+  );
+  url.searchParams.set('from', fromStr);
+  url.searchParams.set('till', tillStr);
+  url.searchParams.set('interval', String(cfg.interval));
+  url.searchParams.set('start', '0');
+  url.searchParams.set('iss.meta', 'off');
+
+  const resp = await fetch(url.toString(), signal !== undefined ? { signal } : undefined);
+  if (!resp.ok) throw new Error(`MOEX live poll failed: HTTP ${resp.status}`);
+
+  const json = await resp.json() as {
+    candles: { columns: string[]; data: unknown[][] };
+  };
+
+  const rows = parseTable<RawCandleRow>(json.candles);
+
+  const candles: MoexCandle[] = rows
+    .filter(
+      (r): r is Required<Pick<RawCandleRow, 'begin' | 'open' | 'high' | 'low' | 'close'>> & RawCandleRow =>
+        r.begin != null && r.open != null && r.high != null && r.low != null && r.close != null,
+    )
+    .map(r => ({
+      begin: r.begin,
+      open: r.open,
+      high: r.high,
+      low: r.low,
+      close: r.close,
+      volume: (r.volume != null && r.volume > 0) ? r.volume : (r.value ?? 0),
+    }));
+
+  return cfg.bucketMinutes !== null ? aggregateCandles(candles, cfg.bucketMinutes) : candles;
+}
+
+// ---------------------------------------------------------------------------
 // Client-side OHLCV aggregation (for 5m, 15m, 4h)
 //
 // MOEX timestamps are Moscow local time ("YYYY-MM-DD HH:MM:SS").

@@ -184,6 +184,14 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
                 </button>
               </>
             )}
+            <button
+              type="button"
+              className="mc-dh-btn mc-dh-close"
+              onClick={onClose}
+              aria-label="Close"
+            >
+              ×
+            </button>
           </div>
         </div>
 
@@ -215,7 +223,7 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
                   >
                     <span className="mc-dsr-ticker">{r.ticker}</span>
                     <span className="mc-dsr-name">{r.name}</span>
-                    <span className="mc-dsr-meta">{r.engine}/{r.market}/{r.board}</span>
+                    <span className="mc-dsr-meta">{r.board}</span>
                   </li>
                 ))}
               </ul>
@@ -267,7 +275,11 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
                       <span className="mc-drawer-item-name">{asset.name}</span>
                     )}
                     <span className="mc-drawer-item-meta">
-                      {asset.engine}/{asset.market}/{asset.board}
+                      {asset.market === 'selt'
+                        ? `FX · ${asset.board}`
+                        : asset.market === 'forts'
+                          ? `FORTS · ${asset.board}`
+                          : asset.board}
                     </span>
                   </div>
 
