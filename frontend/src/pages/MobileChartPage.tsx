@@ -162,6 +162,10 @@ function initDiagnosticsOpen(): boolean {
   return lsGet('diagnosticsOpen') === 'true';
 }
 
+function initOverlayToggle(key: 'showSma20' | 'showEma20'): boolean {
+  return lsGet(key) === 'true';
+}
+
 // ---------------------------------------------------------------------------
 // Source display helper
 // ---------------------------------------------------------------------------
@@ -202,6 +206,8 @@ export function MobileChartPage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [watchlist,  setWatchlist]  = useState<WatchlistAsset[]>(loadWatchlist);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(initDiagnosticsOpen);
+  const [showSma20, setShowSma20] = useState(() => initOverlayToggle('showSma20'));
+  const [showEma20, setShowEma20] = useState(() => initOverlayToggle('showEma20'));
 
   const debounceRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchBoxRef    = useRef<HTMLDivElement | null>(null);
@@ -269,6 +275,8 @@ export function MobileChartPage() {
   useEffect(() => { lsSet('datePreset', datePreset); }, [datePreset]);
   useEffect(() => { lsSet('liveEnabled', liveEnabled ? 'true' : 'false'); }, [liveEnabled]);
   useEffect(() => { lsSet('diagnosticsOpen', diagnosticsOpen ? 'true' : 'false'); }, [diagnosticsOpen]);
+  useEffect(() => { lsSet('showSma20', showSma20 ? 'true' : 'false'); }, [showSma20]);
+  useEffect(() => { lsSet('showEma20', showEma20 ? 'true' : 'false'); }, [showEma20]);
 
   // Keep fullCandlesRef current so the live-poll closure can check without
   // adding fullCandles to the live-effect deps (which would restart the interval).
@@ -576,6 +584,25 @@ export function MobileChartPage() {
       </div>
 
       {/* ── Chart / states ──────────────────────────────────────────── */}
+      <div className="mc-chart-settings" role="group" aria-label="Chart overlays">
+        <button
+          type="button"
+          className={`mc-overlay-chip${showSma20 ? ' mc-overlay-chip-active mc-overlay-chip-sma' : ''}`}
+          onClick={() => setShowSma20(v => !v)}
+          title={showSma20 ? 'Hide SMA 20' : 'Show SMA 20'}
+        >
+          SMA
+        </button>
+        <button
+          type="button"
+          className={`mc-overlay-chip${showEma20 ? ' mc-overlay-chip-active mc-overlay-chip-ema' : ''}`}
+          onClick={() => setShowEma20(v => !v)}
+          title={showEma20 ? 'Hide EMA 20' : 'Show EMA 20'}
+        >
+          EMA
+        </button>
+      </div>
+
       <div className="mc-chart-area">
         {hasData ? (
           <div className="mc-chart-stack">
@@ -584,6 +611,8 @@ export function MobileChartPage() {
               liveCandle={liveCandle}
               dataKey={dataKey}
               timeframe={timeframe}
+              showSma20={showSma20}
+              showEma20={showEma20}
             />
             {loading ? <div className="mc-chart-sync-pill">Syncing...</div> : null}
             {compactError ? <div className="mc-chart-error-pill">{compactError}</div> : null}

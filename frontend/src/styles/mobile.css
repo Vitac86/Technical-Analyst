@@ -342,6 +342,45 @@
   opacity: 0.55;
 }
 
+.mc-chart-settings {
+  display: flex;
+  gap: 6px;
+  padding: 0 14px 2px;
+  flex-shrink: 0;
+}
+
+.mc-overlay-chip {
+  min-width: 56px;
+  min-height: 32px;
+  border: 1px solid var(--mc-border);
+  border-radius: 6px;
+  background: #171e28;
+  color: var(--mc-muted);
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mc-overlay-chip:active {
+  opacity: 0.78;
+}
+
+.mc-overlay-chip-active {
+  background: #1f2b35;
+}
+
+.mc-overlay-chip-sma {
+  border-color: rgba(215, 185, 79, 0.55);
+  color: #e8cd6d;
+}
+
+.mc-overlay-chip-ema {
+  border-color: rgba(100, 184, 216, 0.55);
+  color: #8fd3ed;
+}
+
 /* ── Chart area ──────────────────────────────────────────────────────────── */
 
 .mc-chart-area {
@@ -350,14 +389,67 @@
   padding: 8px 14px 0;
 }
 
+.mc-chart-widget {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.mc-ohlc-strip {
+  display: flex;
+  align-items: center;
+  gap: 4px 7px;
+  flex-wrap: wrap;
+  min-height: 28px;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border: 1px solid var(--mc-border);
+  border-bottom-color: #1e2530;
+  border-radius: 6px 6px 0 0;
+  background: #111720;
+  color: #c7d0dc;
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.mc-ohlc-strip > span {
+  white-space: nowrap;
+}
+
+.mc-ohlc-time {
+  color: var(--mc-text);
+  font-weight: 900;
+}
+
+.mc-ohlc-label,
+.mc-ohlc-empty {
+  color: var(--mc-dim);
+}
+
+.mc-ohlc-up {
+  color: var(--mc-green);
+}
+
+.mc-ohlc-down {
+  color: #ff8d96;
+}
+
+.mc-chart-frame {
+  position: relative;
+  min-width: 0;
+}
+
 .mc-chart-canvas {
   width: 100%;
   height: 62vh;
   min-height: 280px;
   max-height: 640px;
-  border-radius: 6px;
+  border-radius: 0 0 6px 6px;
   overflow: hidden;
   border: 1px solid var(--mc-border);
+  border-top: none;
 }
 
 .mc-chart-stack {
@@ -379,7 +471,7 @@
 }
 
 .mc-chart-sync-pill {
-  top: 10px;
+  top: 42px;
   width: max-content;
   max-width: calc(100% - 20px);
   right: auto;
@@ -396,6 +488,45 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.mc-latest-btn {
+  position: absolute;
+  right: 10px;
+  bottom: 12px;
+  z-index: 3;
+  min-width: 64px;
+  min-height: 32px;
+  border: 1px solid rgba(169, 216, 255, 0.42);
+  border-radius: 6px;
+  background: rgba(17, 23, 32, 0.92);
+  color: #a9d8ff;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 900;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.mc-latest-btn:active {
+  opacity: 0.82;
+}
+
+.mc-chart-local-error {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 10px;
+  z-index: 4;
+  border: 1px solid rgba(235, 87, 87, 0.35);
+  border-radius: 6px;
+  background: rgba(42, 23, 29, 0.92);
+  color: #ffd8de;
+  padding: 7px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
 }
 
 /* ── Loading / error / empty states ─────────────────────────────────────── */
@@ -1045,6 +1176,24 @@
   .mc-chip-live {
     font-size: 10px;
     padding: 5px 8px;
+  }
+
+  .mc-overlay-chip {
+    min-width: 48px;
+    min-height: 30px;
+    font-size: 10px;
+  }
+
+  .mc-ohlc-strip {
+    gap: 3px 5px;
+    padding: 5px 7px;
+    font-size: 9px;
+  }
+
+  .mc-latest-btn {
+    min-width: 58px;
+    min-height: 30px;
+    font-size: 10px;
   }
 
   .mc-ticker {
