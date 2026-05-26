@@ -1,5 +1,5 @@
-export const CURRENT_APP_VERSION_CODE = 4;
-export const CURRENT_APP_VERSION_NAME = "1.0.3";
+export const CURRENT_APP_VERSION_CODE = 5;
+export const CURRENT_APP_VERSION_NAME = "1.0.4";
 
 const UPDATE_MANIFEST_URL =
   "https://raw.githubusercontent.com/Vitac86/Technical-Analyst/main/mobile-update.json";

@@ -15,15 +15,23 @@ import '../styles/mobile.css';
 const TIMEFRAMES = ['5m', '15m', '1h', '4h', '1d'] as const;
 type Timeframe = (typeof TIMEFRAMES)[number];
 
-const DATE_PRESETS = ['1W', '1M', '3M', '6M', '1Y'] as const;
+const DATE_PRESETS = ['1D', '3D', '1W', '1M', '3M', '6M', '1Y', '3Y'] as const;
 type DatePreset = (typeof DATE_PRESETS)[number];
 
 const DEFAULT_PRESET: Record<Timeframe, DatePreset> = {
-  '5m':  '1W',
-  '15m': '1M',
+  '5m':  '1D',
+  '15m': '1W',
   '1h':  '1M',
-  '4h':  '6M',
+  '4h':  '3M',
   '1d':  '6M',
+};
+
+const SAFE_DATE_PRESETS: Record<Timeframe, readonly DatePreset[]> = {
+  '5m':  ['1D', '3D', '1W'],
+  '15m': ['1W', '1M'],
+  '1h':  ['1M', '3M'],
+  '4h':  ['3M', '6M'],
+  '1d':  ['6M', '1Y', '3Y'],
 };
 
 type LiveStatus = 'live' | 'paused' | 'error';
@@ -34,6 +42,14 @@ const POLL_INTERVAL_MS: Record<string, number> = {
   '15m': 1000,
   '1h':  5000,
   '4h':  10000,
+};
+
+const MOEX_INTERVAL_LABEL: Record<Timeframe, string> = {
+  '5m':  '1m -> 5m',
+  '15m': '1m -> 15m',
+  '1h':  '60m',
+  '4h':  '60m -> 4h',
+  '1d':  '1d',
 };
 
 // ---------------------------------------------------------------------------
@@ -60,11 +76,14 @@ function today(): string {
 function fromDate(preset: DatePreset): string {
   const d = new Date();
   switch (preset) {
+    case '1D': d.setDate(d.getDate() - 1);           break;
+    case '3D': d.setDate(d.getDate() - 3);           break;
     case '1W': d.setDate(d.getDate() - 7);           break;
     case '1M': d.setMonth(d.getMonth() - 1);          break;
     case '3M': d.setMonth(d.getMonth() - 3);          break;
     case '6M': d.setMonth(d.getMonth() - 6);          break;
     case '1Y': d.setFullYear(d.getFullYear() - 1);    break;
+    case '3Y': d.setFullYear(d.getFullYear() - 3);    break;
   }
   return d.toISOString().slice(0, 10);
 }
@@ -72,6 +91,44 @@ function fromDate(preset: DatePreset): string {
 function formatHms(d: Date): string {
   const p = (n: number) => String(n).padStart(2, '0');
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+function localYmd(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function dayDiff(fromYmd: string, toYmd: string): number {
+  const [fy, fm, fd] = fromYmd.split('-').map(Number);
+  const [ty, tm, td] = toYmd.split('-').map(Number);
+  if (!fy || !fm || !fd || !ty || !tm || !td) return 0;
+  const fromUtc = Date.UTC(fy, fm - 1, fd);
+  const toUtc = Date.UTC(ty, tm - 1, td);
+  return Math.floor((toUtc - fromUtc) / 86_400_000);
+}
+
+function freshnessHint(tf: Timeframe, latestBegin?: string): string | null {
+  if (!latestBegin) return null;
+
+  const latestDate = latestBegin.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(latestDate)) return null;
+
+  const ageDays = dayDiff(latestDate, localYmd(new Date()));
+  if (ageDays <= 0) return null;
+  if (tf !== '1d') return ageDays === 1 ? 'Last candle: yesterday' : `Stale: ${latestDate}`;
+  return ageDays > 4 ? `Stale: ${latestDate}` : null;
+}
+
+function safePresetForTimeframe(tf: Timeframe, preset: string | null): DatePreset {
+  const p = preset as DatePreset;
+  return DATE_PRESETS.includes(p) && SAFE_DATE_PRESETS[tf].includes(p)
+    ? p
+    : DEFAULT_PRESET[tf];
+}
+
+function formatPollInterval(tf: Timeframe): string {
+  const ms = POLL_INTERVAL_MS[tf];
+  return ms ? `${ms / 1000}s` : 'off';
 }
 
 // ---------------------------------------------------------------------------
@@ -88,16 +145,21 @@ function initSource(): MoexSource {
 }
 
 function initTimeframe(): Timeframe {
-  return (lsGet('timeframe') as Timeframe | null) ?? '1d';
+  const saved = lsGet('timeframe') as Timeframe | null;
+  return saved && TIMEFRAMES.includes(saved) ? saved : '1d';
 }
 
 function initPreset(tf: Timeframe): DatePreset {
-  return (lsGet('datePreset') as DatePreset | null) ?? DEFAULT_PRESET[tf];
+  return safePresetForTimeframe(tf, lsGet('datePreset'));
 }
 
 function initLiveEnabled(): boolean {
   const v = lsGet('liveEnabled');
   return v === null || v === 'true'; // default ON
+}
+
+function initDiagnosticsOpen(): boolean {
+  return lsGet('diagnosticsOpen') === 'true';
 }
 
 // ---------------------------------------------------------------------------
@@ -129,6 +191,7 @@ export function MobileChartPage() {
 
   const [liveEnabled,    setLiveEnabled]    = useState(initLiveEnabled);
   const [liveStatus,     setLiveStatus]     = useState<LiveStatus>('paused');
+  const [lastRefreshTime, setLastRefreshTime] = useState<string | null>(null);
   const [lastUpdateTime, setLastUpdateTime] = useState<string | null>(null);
 
   const [searchQuery,   setSearchQuery]   = useState('');
@@ -138,6 +201,7 @@ export function MobileChartPage() {
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [watchlist,  setWatchlist]  = useState<WatchlistAsset[]>(loadWatchlist);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(initDiagnosticsOpen);
 
   const debounceRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchBoxRef    = useRef<HTMLDivElement | null>(null);
@@ -153,20 +217,33 @@ export function MobileChartPage() {
 
   // ── Candle loading ────────────────────────────────────────────────────────
 
-  async function loadCandles(src: MoexSource, tf: Timeframe, preset: DatePreset) {
+  async function loadCandles(
+    src: MoexSource,
+    tf: Timeframe,
+    preset: DatePreset,
+    options: { preserveData?: boolean } = {},
+  ) {
     loadGenRef.current += 1;
     const gen = loadGenRef.current;
+    const preserveData = options.preserveData === true;
 
     liveInFlightRef.current = false; // interrupt any in-flight live poll
     setLoading(true);
     setError(null);
-    setFullCandles([]);
-    setLiveCandle(null);
+    if (!preserveData) {
+      setFullCandles([]);
+      setLiveCandle(null);
+      setLastRefreshTime(null);
+      setLastUpdateTime(null);
+    }
 
     try {
       const data = await loadMoexCandles(src, tf, fromDate(preset), today());
       if (gen !== loadGenRef.current) return;
       setFullCandles(data);
+      setLiveCandle(null);
+      setLastRefreshTime(formatHms(new Date()));
+      setLastUpdateTime(null);
     } catch (err) {
       if (gen !== loadGenRef.current) return;
       setError(err instanceof Error ? err.message : 'Failed to load candle data.');
@@ -191,6 +268,7 @@ export function MobileChartPage() {
   useEffect(() => { lsSet('timeframe',  timeframe);  }, [timeframe]);
   useEffect(() => { lsSet('datePreset', datePreset); }, [datePreset]);
   useEffect(() => { lsSet('liveEnabled', liveEnabled ? 'true' : 'false'); }, [liveEnabled]);
+  useEffect(() => { lsSet('diagnosticsOpen', diagnosticsOpen ? 'true' : 'false'); }, [diagnosticsOpen]);
 
   // Keep fullCandlesRef current so the live-poll closure can check without
   // adding fullCandles to the live-effect deps (which would restart the interval).
@@ -209,6 +287,7 @@ export function MobileChartPage() {
     }
 
     let cancelled = false;
+    const controller = new AbortController();
 
     async function pollOnce() {
       if (liveInFlightRef.current) return;
@@ -218,7 +297,7 @@ export function MobileChartPage() {
 
       liveInFlightRef.current = true;
       try {
-        const recent = await loadMoexRecentCandles(source, timeframe);
+        const recent = await loadMoexRecentCandles(source, timeframe, controller.signal);
         if (cancelled) return;
         if (recent.length > 0) {
           // Only update liveCandle — NOT fullCandles.
@@ -231,7 +310,7 @@ export function MobileChartPage() {
           setLiveStatus('live'); // healthy poll, market just has no new data
         }
       } catch {
-        if (!cancelled) setLiveStatus('error');
+        if (!cancelled && !controller.signal.aborted) setLiveStatus('error');
       } finally {
         if (!cancelled) liveInFlightRef.current = false;
       }
@@ -251,6 +330,7 @@ export function MobileChartPage() {
     return () => {
       cancelled = true;
       liveInFlightRef.current = false;
+      controller.abort();
       clearInterval(id);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
@@ -321,7 +401,7 @@ export function MobileChartPage() {
 
   function handleTimeframeChange(tf: Timeframe) {
     if (tf === timeframe) return;
-    const newPreset = DEFAULT_PRESET[tf];
+    const newPreset = safePresetForTimeframe(tf, datePreset);
     setTimeframe(tf);
     setDatePreset(newPreset);
     void loadCandles(source, tf, newPreset);
@@ -329,8 +409,13 @@ export function MobileChartPage() {
 
   function handlePresetChange(preset: DatePreset) {
     if (preset === datePreset) return;
+    if (!SAFE_DATE_PRESETS[timeframe].includes(preset)) return;
     setDatePreset(preset);
     void loadCandles(source, timeframe, preset);
+  }
+
+  function handleManualRefresh() {
+    void loadCandles(source, timeframe, datePreset, { preserveData: true });
   }
 
   function handleRetry() {
@@ -353,6 +438,24 @@ export function MobileChartPage() {
   const hasData    = fullCandles.length > 0;
   const noData     = !hasData && !loading && !error;
   const selectedId = makeAssetId(source.engine, source.market, source.board, source.ticker);
+  const firstCandle = fullCandles[0] ?? null;
+  const lastFullCandle = fullCandles[fullCandles.length - 1] ?? null;
+  const latestChartCandle =
+    liveCandle && (!lastFullCandle || liveCandle.begin >= lastFullCandle.begin)
+      ? liveCandle
+      : lastFullCandle;
+  const chartCandleCount =
+    fullCandles.length + (liveCandle && lastFullCandle && liveCandle.begin > lastFullCandle.begin ? 1 : 0);
+  const staleHint = freshnessHint(timeframe, latestChartCandle?.begin);
+  const liveStateText = loading
+    ? 'SYNCING'
+    : timeframe === '1d' || !liveEnabled
+      ? 'PAUSED'
+      : liveStatus === 'error'
+        ? 'LIVE ERROR'
+        : 'LIVE';
+  const liveBadgeTone = loading ? 'syncing' : liveStatus;
+  const compactError = error && hasData ? error : null;
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -384,8 +487,8 @@ export function MobileChartPage() {
           <span className="mc-source-chip">{formatSource(source)}</span>
         </div>
         <div className="mc-header-right">
-          <span className={`mc-live-badge mc-live-badge--${liveStatus}`}>
-            {liveStatus === 'live' ? 'LIVE' : liveStatus === 'error' ? 'ERR' : 'PAUSE'}
+          <span className={`mc-live-badge mc-live-badge--${liveBadgeTone}`}>
+            {liveStateText}
           </span>
           <span className="mc-tf-chip">{timeframe}</span>
         </div>
@@ -447,10 +550,19 @@ export function MobileChartPage() {
           >
             ● LIVE
           </button>
+          <button
+            type="button"
+            className="mc-chip mc-chip-refresh"
+            onClick={handleManualRefresh}
+            disabled={loading}
+            title="Refresh chart data"
+          >
+            {loading ? 'Loading' : 'Refresh'}
+          </button>
         </div>
 
         <div className="mc-chip-row" role="group" aria-label="Date range">
-          {DATE_PRESETS.map(p => (
+          {SAFE_DATE_PRESETS[timeframe].map(p => (
             <button
               key={p}
               type="button"
@@ -465,7 +577,18 @@ export function MobileChartPage() {
 
       {/* ── Chart / states ──────────────────────────────────────────── */}
       <div className="mc-chart-area">
-        {loading ? (
+        {hasData ? (
+          <div className="mc-chart-stack">
+            <MobilePriceChart
+              candles={fullCandles}
+              liveCandle={liveCandle}
+              dataKey={dataKey}
+              timeframe={timeframe}
+            />
+            {loading ? <div className="mc-chart-sync-pill">Syncing...</div> : null}
+            {compactError ? <div className="mc-chart-error-pill">{compactError}</div> : null}
+          </div>
+        ) : loading ? (
           <div className="mc-state mc-state-loading">
             <div className="mc-spinner" aria-hidden="true" />
             Loading {source.ticker} · {timeframe}…
@@ -481,24 +604,50 @@ export function MobileChartPage() {
           <div className="mc-state mc-state-empty">
             No candles for {source.ticker} · {timeframe} · {datePreset}
           </div>
-        ) : (
-          <MobilePriceChart
-            candles={fullCandles}
-            liveCandle={liveCandle}
-            dataKey={dataKey}
-            timeframe={timeframe}
-          />
-        )}
+        ) : null}
       </div>
 
       {/* ── Footer ──────────────────────────────────────────────────── */}
-      {hasData && !loading ? (
-        <div className="mc-footer">
-          <span>{fullCandles.length} candles · {source.ticker} · {timeframe} · {datePreset}</span>
-          {liveEnabled && lastUpdateTime ? (
-            <span className="mc-footer-live">↻ {lastUpdateTime}</span>
+      {hasData ? (
+        <>
+          <div className="mc-footer">
+            <div className="mc-footer-main">
+              <span>{source.ticker}</span>
+              <span>{timeframe}</span>
+              <span>{datePreset}</span>
+              <span>{chartCandleCount} candles</span>
+              <span className={`mc-footer-state mc-footer-state-${liveStateText.toLowerCase().replace(' ', '-')}`}>
+                {liveStateText}
+              </span>
+              <button
+                type="button"
+                className={`mc-data-toggle${diagnosticsOpen ? ' mc-data-toggle-on' : ''}`}
+                onClick={() => setDiagnosticsOpen(v => !v)}
+              >
+                Data
+              </button>
+            </div>
+            <div className="mc-footer-detail">
+              <span>Last: {latestChartCandle?.begin ?? '--'}</span>
+              {lastUpdateTime ? <span>Live: {lastUpdateTime}</span> : null}
+              {staleHint ? <span className="mc-footer-stale">{staleHint}</span> : null}
+              {compactError ? <span className="mc-footer-error">Refresh failed</span> : null}
+            </div>
+          </div>
+
+          {diagnosticsOpen ? (
+            <div className="mc-diagnostics">
+              <span>{source.engine}/{source.market}/{source.board}/{source.ticker}</span>
+              <span>MOEX: {MOEX_INTERVAL_LABEL[timeframe]}</span>
+              <span>Count: {chartCandleCount}</span>
+              <span>First: {firstCandle?.begin ?? '--'}</span>
+              <span>Last: {latestChartCandle?.begin ?? '--'}</span>
+              <span>Full: {lastRefreshTime ?? '--'}</span>
+              <span>Live: {lastUpdateTime ?? '--'}</span>
+              <span>Poll: {formatPollInterval(timeframe)}</span>
+            </div>
           ) : null}
-        </div>
+        </>
       ) : null}
 
     </div>

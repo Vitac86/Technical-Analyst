@@ -37,6 +37,12 @@ export type MoexCandle = {
   volume: number;
 };
 
+export type MoexQuote = {
+  price: number | null;
+  changePercent: number | null;
+  updatedAt?: string;
+};
+
 // ---------------------------------------------------------------------------
 // Timeframe → MOEX interval + optional aggregation
 // ---------------------------------------------------------------------------
@@ -135,6 +141,129 @@ export async function searchMoex(query: string): Promise<MoexSearchResult[]> {
   }
 
   return results;
+}
+
+// ---------------------------------------------------------------------------
+// Lightweight one-security quote loading
+// ---------------------------------------------------------------------------
+
+type RawMoexRow = Record<string, unknown>;
+
+function readValue(row: RawMoexRow, keys: string[]): unknown {
+  for (const key of keys) {
+    if (key in row) return row[key];
+
+    const upper = key.toUpperCase();
+    if (upper in row) return row[upper];
+
+    const lower = key.toLowerCase();
+    if (lower in row) return row[lower];
+  }
+  return undefined;
+}
+
+function readNumber(row: RawMoexRow, keys: string[]): number | null {
+  const value = readValue(row, keys);
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const n = Number(value.replace(',', '.'));
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function readString(row: RawMoexRow, keys: string[]): string | undefined {
+  const value = readValue(row, keys);
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+}
+
+function normalizeQuote(row: RawMoexRow): MoexQuote | null {
+  const price = readNumber(row, [
+    'LAST',
+    'LASTVALUE',
+    'MARKETPRICE',
+    'MARKETPRICE2',
+    'LCURRENTPRICE',
+    'CURRENTVALUE',
+    'ADMITTEDQUOTE',
+    'SETTLEPRICE',
+    'PRICE',
+    'WAPRICE',
+    'BID',
+    'OFFER',
+    'LEGALCLOSEPRICE',
+    'PREVPRICE',
+  ]);
+
+  const directChangePercent = readNumber(row, [
+    'CHANGEPRCNT',
+    'LASTCHANGEPRCNT',
+    'LASTTOPREVPRICE',
+    'PRICEMINUSPREVWAPRICEPRCNT',
+  ]);
+
+  const previousPrice = readNumber(row, [
+    'PREVPRICE',
+    'PREVWAPRICE',
+    'PREVLEGALCLOSEPRICE',
+    'PREVADMITTEDQUOTE',
+  ]);
+
+  const absoluteChange = readNumber(row, [
+    'CHANGE',
+    'LASTCHANGE',
+    'PRICEMINUSPREVWAPRICE',
+  ]);
+
+  const changePercent =
+    directChangePercent ??
+    (price != null && previousPrice != null && previousPrice !== 0
+      ? ((price - previousPrice) / previousPrice) * 100
+      : absoluteChange != null && previousPrice != null && previousPrice !== 0
+        ? (absoluteChange / previousPrice) * 100
+        : null);
+
+  const updatedAt = readString(row, [
+    'SYSTIME',
+    'UPDATETIME',
+    'TIME',
+    'TRADINGTIME',
+    'TRADEDATE',
+  ]);
+
+  if (price == null && changePercent == null) return null;
+
+  return {
+    price,
+    changePercent,
+    ...(updatedAt ? { updatedAt } : {}),
+  };
+}
+
+export async function fetchMoexQuote(
+  source: MoexSource,
+  signal?: AbortSignal,
+): Promise<MoexQuote | null> {
+  const url = new URL(
+    `${MOEX_ISS}/engines/${source.engine}/markets/${source.market}/boards/${source.board}/securities/${source.ticker}.json`,
+  );
+  url.searchParams.set('iss.meta', 'off');
+  url.searchParams.set('iss.only', 'marketdata,securities');
+
+  const resp = await fetch(url.toString(), signal !== undefined ? { signal } : undefined);
+  if (!resp.ok) throw new Error(`MOEX quote failed: HTTP ${resp.status}`);
+
+  const json = await resp.json() as {
+    marketdata?: { columns: string[]; data: unknown[][] };
+    securities?: { columns: string[]; data: unknown[][] };
+  };
+
+  const marketRows = json.marketdata ? parseTable<RawMoexRow>(json.marketdata) : [];
+  const quote = marketRows.length > 0 ? normalizeQuote(marketRows[0]) : null;
+  if (quote) return quote;
+
+  const securityRows = json.securities ? parseTable<RawMoexRow>(json.securities) : [];
+  return securityRows.length > 0 ? normalizeQuote(securityRows[0]) : null;
 }
 
 // ---------------------------------------------------------------------------

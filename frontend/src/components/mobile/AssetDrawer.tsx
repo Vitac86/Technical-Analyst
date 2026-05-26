@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { searchMoex } from '../../api/moexDirect';
-import type { MoexSearchResult } from '../../api/moexDirect';
+import { fetchMoexQuote, searchMoex } from '../../api/moexDirect';
+import type { MoexQuote, MoexSearchResult } from '../../api/moexDirect';
 import { makeAssetId } from '../../utils/mobileWatchlist';
 import type { WatchlistAsset } from '../../utils/mobileWatchlist';
 import { checkForAppUpdate, CURRENT_APP_VERSION_NAME } from '../../api/appUpdate';
@@ -14,6 +14,13 @@ type UpdatePhase =
   | { phase: 'unsupported'; manifest: AppUpdateManifest }
   | { phase: 'error'; message: string };
 
+type DrawerQuoteState = {
+  quote: MoexQuote | null;
+  error: boolean;
+};
+
+const QUOTE_POLL_MS = 30000;
+
 type Props = {
   open: boolean;
   onClose: () => void;
@@ -22,6 +29,26 @@ type Props = {
   onSelect: (asset: WatchlistAsset) => void;
   onWatchlistChange: (list: WatchlistAsset[]) => void;
 };
+
+function formatQuotePrice(price: number): string {
+  const abs = Math.abs(price);
+  const fractionDigits = abs >= 1000 ? 1 : abs >= 1 ? 2 : 4;
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  }).format(price);
+}
+
+function formatQuoteChange(changePercent: number): string {
+  const sign = changePercent > 0 ? '+' : '';
+  return `${sign}${changePercent.toFixed(2)}%`;
+}
+
+function quoteTone(changePercent: number): string {
+  if (changePercent > 0) return 'pos';
+  if (changePercent < 0) return 'neg';
+  return 'flat';
+}
 
 export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, onWatchlistChange }: Props) {
   const [editMode,       setEditMode]       = useState(false);
@@ -33,7 +60,9 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
   const [aliasId,        setAliasId]        = useState<string | null>(null);
   const [aliasValue,     setAliasValue]     = useState('');
   const [updateState,    setUpdateState]    = useState<UpdatePhase>({ phase: 'idle' });
+  const [quotes,         setQuotes]         = useState<Record<string, DrawerQuoteState>>({});
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const quoteInFlightRef = useRef(false);
 
   // Reset local UI state after drawer closes (after slide-out animation)
   useEffect(() => {
@@ -64,6 +93,58 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
       }
     }, 350);
   }, []);
+
+  useEffect(() => {
+    if (!open) return;
+
+    if (watchlist.length === 0) {
+      setQuotes({});
+      return;
+    }
+
+    let cancelled = false;
+    const controller = new AbortController();
+
+    async function loadQuotes() {
+      if (quoteInFlightRef.current) return;
+      if (document.visibilityState !== 'visible') return;
+
+      quoteInFlightRef.current = true;
+      const snapshot = watchlist;
+
+      try {
+        const entries = await Promise.all(snapshot.map(async asset => {
+          try {
+            const quote = await fetchMoexQuote(asset, controller.signal);
+            return [asset.id, { quote, error: false }] as const;
+          } catch {
+            return [asset.id, { quote: null, error: !controller.signal.aborted }] as const;
+          }
+        }));
+
+        if (cancelled || controller.signal.aborted) return;
+        setQuotes(Object.fromEntries(entries) as Record<string, DrawerQuoteState>);
+      } finally {
+        if (!cancelled) quoteInFlightRef.current = false;
+      }
+    }
+
+    function onVisibilityChange() {
+      if (document.visibilityState === 'visible') void loadQuotes();
+    }
+
+    void loadQuotes();
+    const id = setInterval(() => { void loadQuotes(); }, QUOTE_POLL_MS);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      cancelled = true;
+      quoteInFlightRef.current = false;
+      controller.abort();
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [open, watchlist]);
 
   function handleSearchInput(val: string) {
     setSearchQuery(val);
@@ -243,6 +324,9 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
           ) : (
             watchlist.map((asset, idx) => {
               const active = asset.id === selectedId;
+              const quoteState = quotes[asset.id];
+              const quote = quoteState?.quote ?? null;
+              const changePercent = quote?.changePercent ?? null;
               return (
                 <div
                   key={asset.id}
@@ -282,6 +366,28 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
                           : asset.board}
                     </span>
                   </div>
+
+                  {!editMode && (
+                    <div
+                      className="mc-drawer-quote"
+                      title={quote?.updatedAt ? `Quote ${quote.updatedAt}` : undefined}
+                    >
+                      {quote?.price != null ? (
+                        <span className="mc-drawer-quote-price">
+                          {formatQuotePrice(quote.price)}
+                        </span>
+                      ) : (
+                        <span className="mc-drawer-quote-dash">--</span>
+                      )}
+                      {changePercent != null ? (
+                        <span className={`mc-drawer-quote-change mc-drawer-quote-change-${quoteTone(changePercent)}`}>
+                          {formatQuoteChange(changePercent)}
+                        </span>
+                      ) : quoteState?.error ? (
+                        <span className="mc-drawer-quote-error">!</span>
+                      ) : null}
+                    </div>
+                  )}
 
                   {/* Edit controls */}
                   {editMode && (
