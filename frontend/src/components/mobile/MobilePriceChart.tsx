@@ -29,6 +29,12 @@ const SMA_EMA_PERIOD = 20;
 const LAST_LINE_WIDTH = 1 as LineWidth;
 const INDICATOR_LINE_WIDTH = 1 as LineWidth;
 
+// Throttle interval for onNearLeftEdge callback (ms).
+const NEAR_EDGE_THROTTLE_MS = 800;
+
+// Fire onNearLeftEdge when visible logical range starts within this many bars of the left edge.
+const NEAR_EDGE_THRESHOLD = 5;
+
 type Props = {
   /** Full candle array from the initial load. Changes trigger setData + fitContent. */
   candles: MoexCandle[];
@@ -39,6 +45,17 @@ type Props = {
   timeframe: string;
   showSma20: boolean;
   showEma20: boolean;
+  /**
+   * Called (throttled) when the user pans left near the oldest loaded candle.
+   * Parent should load older candles and prepend them.
+   */
+  onNearLeftEdge?: () => void;
+  /**
+   * When `current === true`, the next candle setData is a prepend of older history.
+   * The chart will save/restore the visible range instead of calling fitContent().
+   * The chart resets `current` to false after consuming the signal.
+   */
+  prependSignalRef?: React.MutableRefObject<boolean>;
 };
 
 type OhlcSnapshot = {
@@ -191,6 +208,8 @@ export function MobilePriceChart({
   timeframe,
   showSma20,
   showEma20,
+  onNearLeftEdge,
+  prependSignalRef,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -208,11 +227,23 @@ export function MobilePriceChart({
   const selectedTimeKeyRef = useRef<string | null>(null);
   const lastOhlcStateKeyRef = useRef<string | null>(null);
   const latestButtonShownRef = useRef(false);
+  // Track valid candle count to compute prepended-bar count on prepend updates.
+  const prevValidCountRef = useRef(0);
+  // Ref mirror of onNearLeftEdge prop — avoids stale closure in chart event handler.
+  const onNearLeftEdgeRef = useRef<(() => void) | undefined>(undefined);
+  // Timestamp of last onNearLeftEdge call for throttle.
+  const nearEdgeThrottleRef = useRef(0);
+
   const isDaily = timeframe === '1d';
 
   const [ohlcSnapshot, setOhlcSnapshot] = useState<OhlcSnapshot | null>(null);
   const [showLatestButton, setShowLatestButton] = useState(false);
   const [chartError, setChartError] = useState<string | null>(null);
+
+  // Keep the callback ref current without re-creating chart event handlers.
+  useEffect(() => {
+    onNearLeftEdgeRef.current = onNearLeftEdge;
+  }, [onNearLeftEdge]);
 
   const publishOhlcSnapshot = useCallback((next: OhlcSnapshot | null) => {
     const nextKey = next?.stateKey ?? 'empty';
@@ -252,6 +283,7 @@ export function MobilePriceChart({
     latestSnapshotRef.current = null;
     fullCandlesRef.current = [];
     liveTailRef.current = [];
+    prevValidCountRef.current = 0;
     publishOhlcSnapshot(null);
 
     let chart: IChartApi;
@@ -317,6 +349,21 @@ export function MobilePriceChart({
 
     const onVisibleLogicalRangeChange = () => {
       updateLatestButtonVisibility(chart);
+
+      // Left-edge detection for lazy older-candle loading.
+      if (!chartHasDataRef.current) return;
+      const cb = onNearLeftEdgeRef.current;
+      if (!cb) return;
+      try {
+        const range = chart.timeScale().getVisibleLogicalRange();
+        if (range && range.from <= NEAR_EDGE_THRESHOLD) {
+          const now = Date.now();
+          if (now - nearEdgeThrottleRef.current > NEAR_EDGE_THROTTLE_MS) {
+            nearEdgeThrottleRef.current = now;
+            cb();
+          }
+        }
+      } catch { /* ignore */ }
     };
 
     chart.subscribeCrosshairMove(onCrosshairMove);
@@ -358,28 +405,51 @@ export function MobilePriceChart({
   useEffect(() => {
     if (!candleSeriesRef.current || !volSeriesRef.current) return;
 
-    fullCandlesRef.current = [];
-    liveTailRef.current = [];
-    ohlcLookupRef.current = new Map();
-    latestSnapshotRef.current = null;
-    selectedTimeKeyRef.current = null;
-    publishOhlcSnapshot(null);
-    clearLastPriceLine();
+    // Consume prepend signal before clearing lookup state.
+    const isPrepend = prependSignalRef?.current === true;
+    if (isPrepend && prependSignalRef) {
+      prependSignalRef.current = false;
+    }
+
+    // Save visible logical range before setData when prepending older history.
+    let savedRange: { from: number; to: number } | null = null;
+    if (isPrepend) {
+      try {
+        const r = chartRef.current?.timeScale().getVisibleLogicalRange();
+        if (r) savedRange = { from: r.from, to: r.to };
+      } catch { /* ignore */ }
+    }
+
+    if (!isPrepend) {
+      // Full reload — reset all state.
+      fullCandlesRef.current = [];
+      liveTailRef.current = [];
+      ohlcLookupRef.current = new Map();
+      latestSnapshotRef.current = null;
+      selectedTimeKeyRef.current = null;
+      prevValidCountRef.current = 0;
+      publishOhlcSnapshot(null);
+      clearLastPriceLine();
+    }
 
     if (candles.length === 0) {
-      chartHasDataRef.current = false;
+      if (!isPrepend) chartHasDataRef.current = false;
       setChartError(null);
       return;
     }
 
     const valid = candles.filter(c => isValidCandle(c, isDaily));
-    if (DEBUG_LIVE) console.log(`[chart] setData: ${valid.length}/${candles.length} valid`);
+    if (DEBUG_LIVE) console.log(`[chart] setData: ${valid.length}/${candles.length} valid isPrepend=${isPrepend}`);
 
     if (valid.length === 0) {
-      chartHasDataRef.current = false;
+      if (!isPrepend) chartHasDataRef.current = false;
       setChartError('No valid candles to display.');
       return;
     }
+
+    const prependedCount = isPrepend
+      ? Math.max(0, valid.length - prevValidCountRef.current)
+      : 0;
 
     const mapped = toCandleData(valid, isDaily);
     const hasVolume = valid.some(c => c.volume > 0);
@@ -388,11 +458,23 @@ export function MobilePriceChart({
     try {
       candleSeriesRef.current.setData(mapped);
       volSeriesRef.current.setData(hasVolume ? toVolumeData(valid, isDaily) : []);
-      chartRef.current?.timeScale().fitContent();
       chartHasDataRef.current = true;
       fullCandlesRef.current = valid;
+      prevValidCountRef.current = valid.length;
       rebuildOhlcLookup(valid);
       updateLastPriceLine(valid[valid.length - 1].close);
+
+      if (isPrepend && savedRange !== null && prependedCount > 0) {
+        // Restore the previously visible area shifted right by the prepended bar count.
+        // This keeps the user looking at the same candles after older history is loaded.
+        chartRef.current?.timeScale().setVisibleLogicalRange({
+          from: savedRange.from + prependedCount,
+          to:   savedRange.to  + prependedCount,
+        });
+      } else if (!isPrepend) {
+        chartRef.current?.timeScale().fitContent();
+      }
+
       publishOhlcSnapshot(latestSnapshotRef.current);
       setChartError(null);
       updateLatestButtonVisibility(chartRef.current);
@@ -401,7 +483,7 @@ export function MobilePriceChart({
       chartHasDataRef.current = false;
       setChartError('Chart data update failed.');
     }
-  }, [candles, dataKey, isDaily, publishOhlcSnapshot, updateLatestButtonVisibility]);
+  }, [candles, dataKey, isDaily, prependSignalRef, publishOhlcSnapshot, updateLatestButtonVisibility]);
 
   useEffect(() => {
     if (!chartHasDataRef.current) {

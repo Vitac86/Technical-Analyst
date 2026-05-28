@@ -1,13 +1,13 @@
 {
-  "versionCode": 9,
-  "versionName": "1.0.8",
-  "apkUrl": "https://github.com/Vitac86/Technical-Analyst/releases/download/v1.0.8/technical-analyst-v1.0.8.apk",
+  "versionCode": 10,
+  "versionName": "1.0.9",
+  "apkUrl": "https://github.com/Vitac86/Technical-Analyst/releases/download/v1.0.9/technical-analyst-v1.0.9.apk",
   "releaseDate": "2026-05-28",
   "notes": [
-    "Fixed BCS authorization endpoint",
-    "Fixed BCS candle loading endpoint",
-    "Fixed BCS candle response parsing",
-    "Moved data provider settings into drawer",
-    "Added compact provider status on chart screen"
+    "Fixed BCS candle request parameters",
+    "Improved BCS 400 error handling",
+    "Added safe BCS range policy",
+    "Added lazy loading of older candles",
+    "Preserved chart position when prepending history"
   ]
 }

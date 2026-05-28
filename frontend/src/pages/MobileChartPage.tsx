@@ -12,6 +12,7 @@ import { loadWatchlist, makeAssetId, saveWatchlist } from '../utils/mobileWatchl
 import type { WatchlistAsset } from '../utils/mobileWatchlist';
 import { computeAiSignal, mergeWithLive } from '../ml/aiSignal';
 import type { AiSignalResult } from '../ml/types';
+import { loadBcsOlderChunk } from '../api/bcsMarketData';
 import '../styles/mobile.css';
 
 // ---------------------------------------------------------------------------
@@ -149,6 +150,11 @@ function formatPollInterval(tf: Timeframe): string {
   return ms ? `${ms / 1000}s` : 'off';
 }
 
+// Deduplicate a sorted candle array by begin timestamp.
+function dedupeSortedCandles(candles: MoexCandle[]): MoexCandle[] {
+  return candles.filter((c, i) => i === 0 || c.begin !== candles[i - 1].begin);
+}
+
 // ---------------------------------------------------------------------------
 // State initializers
 // ---------------------------------------------------------------------------
@@ -219,7 +225,7 @@ export function MobileChartPage() {
   const [timeframe,  setTimeframe]  = useState<Timeframe>(initTimeframe);
   const [datePreset, setDatePreset] = useState<DatePreset>(() => initPreset(initTimeframe()));
 
-  // fullCandles: set only by loadCandles — never touched by live polling
+  // fullCandles: set only by loadCandles/loadOlderCandles — never touched by live polling
   const [fullCandles, setFullCandles] = useState<MoexCandle[]>([]);
   // liveCandle: set only by live polling — cleared on full reload
   const [liveCandle,  setLiveCandle]  = useState<MoexCandle | null>(null);
@@ -251,14 +257,22 @@ export function MobileChartPage() {
   const [providerStatus,   setProviderStatus]   = useState<ProviderStatus>('moex');
   const [fallbackWarning,  setFallbackWarning]  = useState<string | null>(null);
 
+  // Lazy older-candle loading state (BCS mode only).
+  const [isLoadingOlder,    setIsLoadingOlder]    = useState(false);
+  const [noMoreOlderCandles, setNoMoreOlderCandles] = useState(false);
+  const [olderLoadError,    setOlderLoadError]    = useState<string | null>(null);
+
   const debounceRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
   const aiDebounceRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchBoxRef    = useRef<HTMLDivElement | null>(null);
   const loadGenRef      = useRef(0);
   const liveInFlightRef = useRef(false);
+  const olderInFlightRef = useRef(false);
   // Mirrors fullCandles so the live-poll closure can read current value
   // without making fullCandles a dependency of the live-polling effect.
   const fullCandlesRef  = useRef<MoexCandle[]>([]);
+  // Signal to MobilePriceChart: when true, next setData call is a prepend (preserve viewport).
+  const prependSignalRef = useRef(false);
 
   // Opaque data key — changes when source/timeframe/preset changes.
   const dataKey = `${source.engine}:${source.market}:${source.board}:${source.ticker}:${timeframe}:${datePreset}`;
@@ -278,9 +292,13 @@ export function MobileChartPage() {
     const preserveData = options.preserveData === true;
 
     liveInFlightRef.current = false;
+    olderInFlightRef.current = false;
     setLoading(true);
     setError(null);
     setFallbackWarning(null);
+    setIsLoadingOlder(false);
+    setNoMoreOlderCandles(false);
+    setOlderLoadError(null);
     if (!preserveData) {
       setFullCandles([]);
       setLiveCandle(null);
@@ -332,6 +350,65 @@ export function MobileChartPage() {
       if (gen === loadGenRef.current) setLoading(false);
     }
   }
+
+  // ── Lazy older-candle loading (BCS only) ─────────────────────────────────
+
+  const loadOlderCandles = useCallback(async () => {
+    if (olderInFlightRef.current) return;
+    if (isLoadingOlder) return;
+    if (noMoreOlderCandles) return;
+    if (providerId !== 'bcs') return;
+    if (providerStatus === 'bcs-fallback') return; // data is MOEX, don't try BCS older
+
+    const currentCandles = fullCandlesRef.current;
+    if (currentCandles.length === 0) return;
+
+    const oldest = currentCandles[0];
+    if (!oldest?.begin) return;
+
+    olderInFlightRef.current = true;
+    setIsLoadingOlder(true);
+    setOlderLoadError(null);
+
+    try {
+      // Parse the Moscow-time begin string back to UTC for the chunk boundary.
+      // oldest.begin is "YYYY-MM-DD HH:mm:ss" in Moscow time (UTC+3).
+      const moscowStr = oldest.begin.replace(' ', 'T') + '+03:00';
+      const oldestDate = new Date(moscowStr);
+      if (isNaN(oldestDate.getTime())) {
+        setOlderLoadError('Could not load older candles');
+        return;
+      }
+
+      const classCode = source.board || 'TQBR';
+      let olderCandles: MoexCandle[];
+      try {
+        olderCandles = await loadBcsOlderChunk(source.ticker, classCode, timeframe, oldestDate);
+      } catch (err) {
+        // On 400, retry once with BCS fallback message; do not crash the chart.
+        const msg = err instanceof Error ? err.message : 'Could not load older candles';
+        setOlderLoadError(msg);
+        return;
+      }
+
+      if (olderCandles.length === 0) {
+        setNoMoreOlderCandles(true);
+        return;
+      }
+
+      // Prepend older candles, sort, deduplicate.
+      // Signal the chart to preserve viewport before state update.
+      prependSignalRef.current = true;
+      setFullCandles(prev => {
+        const merged = [...olderCandles, ...prev];
+        merged.sort((a, b) => (a.begin < b.begin ? -1 : a.begin > b.begin ? 1 : 0));
+        return dedupeSortedCandles(merged);
+      });
+    } finally {
+      olderInFlightRef.current = false;
+      setIsLoadingOlder(false);
+    }
+  }, [isLoadingOlder, noMoreOlderCandles, providerId, providerStatus, source, timeframe]);
 
   useEffect(() => {
     void loadCandles(source, timeframe, datePreset);
@@ -554,6 +631,9 @@ export function MobileChartPage() {
   const liveBadgeTone = loading ? 'syncing' : liveStatus;
   const compactError = error && hasData ? error : null;
 
+  // Lazy loading is only offered in BCS mode on a live BCS provider (not fallback).
+  const olderLoadEnabled = providerId === 'bcs' && providerStatus === 'bcs' && hasData;
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
@@ -722,11 +802,23 @@ export function MobileChartPage() {
               timeframe={timeframe}
               showSma20={showSma20}
               showEma20={showEma20}
+              onNearLeftEdge={olderLoadEnabled ? loadOlderCandles : undefined}
+              prependSignalRef={prependSignalRef}
             />
             {loading ? <div className="mc-chart-sync-pill">Syncing...</div> : null}
             {compactError ? <div className="mc-chart-error-pill">{compactError}</div> : null}
             {fallbackWarning && !compactError ? (
               <div className="mc-chart-fallback-pill">{fallbackWarning}</div>
+            ) : null}
+            {/* Older-candle loading status (BCS mode) */}
+            {olderLoadEnabled && isLoadingOlder ? (
+              <div className="mc-older-loading-pill">Loading older candles…</div>
+            ) : null}
+            {olderLoadEnabled && noMoreOlderCandles && !isLoadingOlder ? (
+              <div className="mc-older-none-pill">No older candles</div>
+            ) : null}
+            {olderLoadEnabled && olderLoadError && !isLoadingOlder ? (
+              <div className="mc-older-error-pill">{olderLoadError}</div>
             ) : null}
           </div>
         ) : loading ? (
@@ -792,6 +884,7 @@ export function MobileChartPage() {
               <span>Live: {lastUpdateTime ?? '--'}</span>
               <span>Poll: {formatPollInterval(timeframe)}</span>
               {fallbackWarning ? <span>Fallback: active</span> : null}
+              {noMoreOlderCandles ? <span>Older: exhausted</span> : null}
             </div>
           ) : null}
 

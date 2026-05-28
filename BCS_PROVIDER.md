@@ -63,7 +63,12 @@ grant_type=refresh_token
 refresh_token=<token>
 ```
 
-Successful response fields: `access_token`, `expires_in`, `refresh_expires_in`, `refresh_token`
+- `client_id` must be `trade-api-write` (not `mobile_app`, not `tradeapi`)
+- Body must be `application/x-www-form-urlencoded` (URLSearchParams), never JSON
+- Successful response fields: `access_token`, `expires_in`, `refresh_expires_in`, `refresh_token`
+- If the response includes a rotated `refresh_token`, it is stored in session memory
+- A 400 with `error=invalid_grant` means the refresh token is expired; the app shows:
+  _"BCS refresh token is invalid or expired. Paste a new token."_
 
 ### Historical candles
 
@@ -77,6 +82,18 @@ Query params:
   endDate     — ISO 8601 UTC
   timeFrame   — M1 | M5 | M15 | M30 | H1 | H4 | D | W | MN
 ```
+
+Supported timeframe mapping:
+
+| App timeframe | BCS timeFrame |
+|---------------|---------------|
+| 5m            | M5            |
+| 15m           | M15           |
+| 1h            | H1            |
+| 4h            | H4            |
+| 1d            | D             |
+
+**Do NOT use:** `instrumentId`, `interval`, `from`, `to` — these are wrong param names that cause HTTP 400.
 
 Response shape:
 ```json
@@ -92,16 +109,55 @@ Response shape:
 }
 ```
 
-> **Note:** BCS returns `bars` newest-first. The app sorts ascending before rendering.
+- Candles are read from `response.bars` (not `candles`, not `data`)
+- BCS returns `bars` newest-first. The app sorts ascending before rendering.
+- Each bar has `time` (UTC ISO 8601), `open`, `high`, `low`, `close`, `volume`
+- The app converts `time` from UTC to Moscow time (+3h) to match MOEX display convention
 
-### Instrument lookup
+---
 
-```
-POST /trade-api-information-service/api/v1/instruments/by-tickers
-Content-Type: application/json
+## Safe range policy (initial load)
 
-{ "tickers": ["SBER"] }
-```
+BCS rejects requests with oversized date ranges. The app enforces safe initial windows:
+
+| Timeframe | Safe window |
+|-----------|-------------|
+| 5m        | 3 days      |
+| 15m       | 10 days     |
+| 1h        | 45 days     |
+| 4h        | 180 days    |
+| 1d        | ~4 years    |
+
+If the user selects a large preset (e.g. 1W on 5m), the initial BCS request is silently trimmed to the safe window. Older bars load lazily as the user pans left.
+
+---
+
+## Lazy older-candle loading
+
+When using BCS mode, panning left near the oldest loaded candle automatically triggers a background load of the next older chunk (same safe window size). The chart:
+
+1. Detects when the visible logical range's left edge is within 5 bars of the oldest bar.
+2. Fires a throttled callback (at most once per 800 ms) to `MobileChartPage`.
+3. `loadOlderCandles()` calls `loadBcsOlderChunk()` with the oldest candle's timestamp as the upper bound.
+4. Older candles are prepended to the in-memory candle array, sorted, and deduplicated.
+5. The chart restores the previously visible area (shifted right by the prepended bar count), so the viewport does not jump.
+6. A small status pill shows: "Loading older candles…", "No older candles", or an error message.
+
+Lazy loading only runs in BCS mode with a live BCS connection (not BCS→MOEX fallback).
+
+---
+
+## Candle persistence policy
+
+**No candles are ever persisted.** All loaded candles live exclusively in React state / chart instance memory and are discarded on app reload. There is no SQLite, no IndexedDB, no localStorage candle storage, and no background sync.
+
+---
+
+## Instrument fields
+
+- `ticker` comes from the selected instrument's `secid` / ticker (e.g. `SBER`)
+- `classCode` comes from the selected instrument's `boardid` / board (e.g. `TQBR`)
+- For MOEX shares, `TQBR` is the correct `classCode`; do not use `SPBRU` for Moscow-listed shares
 
 ---
 
@@ -119,10 +175,22 @@ Content-Type: application/json
 ## Fallback behavior
 
 When **Fallback to MOEX** is enabled (default):
-- If BCS candle load fails for any reason (auth error, network error, rate limit), the chart automatically loads MOEX data.
+- If BCS candle load fails for any reason (auth error, network error, rate limit, 400), the chart automatically loads MOEX data.
 - A compact yellow warning is shown: **BCS unavailable, using MOEX**.
 - The footer shows: **Data: BCS→MOEX**.
+- Lazy older-candle loading is disabled while in fallback mode.
 
 When fallback is disabled:
 - BCS failures show a readable error message.
 - Existing chart data (if any) is preserved — no black/blank screen.
+
+---
+
+## 400 error handling
+
+A HTTP 400 from BCS means the request parameters are invalid.
+
+- Auth 400 with `error=invalid_grant` → _"BCS refresh token is invalid or expired. Paste a new token."_
+- Candles 400 → _"BCS rejected the candle request. Try a smaller range or another timeframe."_
+
+The app parses `type` and `traceId` fields from the 400 response body for internal diagnostics, but never logs or displays them to the user in raw form.

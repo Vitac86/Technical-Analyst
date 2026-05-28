@@ -17,14 +17,37 @@ const BCS_INTERVAL_MAP: Record<string, string> = {
   '1d':  'D',
 };
 
+// Safe initial-load windows and lazy-load chunk sizes per timeframe.
+// Keeps individual BCS requests small to avoid 400 range errors.
+export const BCS_SAFE_WINDOW_DAYS: Record<string, number> = {
+  '5m':  3,
+  '15m': 10,
+  '1h':  45,
+  '4h':  180,
+  '1d':  1500,
+};
+
 // ---------------------------------------------------------------------------
 // Error types
 // ---------------------------------------------------------------------------
 
-export type BcsLoadError = 'auth_error' | 'rate_limited' | 'network_error' | 'unknown';
+export type BcsLoadError = 'auth_error' | 'invalid_request' | 'rate_limited' | 'network_error' | 'unknown';
+
+export interface BcsApiError {
+  provider: 'bcs';
+  endpoint: 'auth' | 'candles-chart';
+  status: number;
+  type?: string;
+  traceId?: string;
+  safeMessage: string;
+}
 
 export class BcsMarketDataException extends Error {
-  constructor(public readonly kind: BcsLoadError, message: string) {
+  constructor(
+    public readonly kind: BcsLoadError,
+    message: string,
+    public readonly apiError?: BcsApiError,
+  ) {
     super(message);
     this.name = 'BcsMarketDataException';
   }
@@ -86,7 +109,7 @@ function parseBcsBars(bars: unknown): MoexCandle[] {
 }
 
 // ---------------------------------------------------------------------------
-// Fetch
+// Fetch (single window)
 // ---------------------------------------------------------------------------
 
 async function fetchBcsCandles(
@@ -123,8 +146,30 @@ async function fetchBcsCandles(
     throw new BcsMarketDataException('network_error', 'Network error fetching BCS candles.');
   }
 
+  if (resp.status === 400) {
+    let type: string | undefined;
+    let traceId: string | undefined;
+    try {
+      const body = await resp.json() as Record<string, unknown>;
+      type    = typeof body.type    === 'string' ? body.type    : undefined;
+      traceId = typeof body.traceId === 'string' ? body.traceId : undefined;
+    } catch { /* ignore parse failure */ }
+    const apiError: BcsApiError = {
+      provider: 'bcs',
+      endpoint: 'candles-chart',
+      status: 400,
+      type,
+      traceId,
+      safeMessage: 'BCS rejected the candle request. Try a smaller range or another timeframe.',
+    };
+    throw new BcsMarketDataException('invalid_request', apiError.safeMessage, apiError);
+  }
+
   if (resp.status === 401 || resp.status === 403) {
-    throw new BcsMarketDataException('auth_error', 'BCS candle request rejected (401/403). Token may be expired.');
+    throw new BcsMarketDataException(
+      'auth_error',
+      'BCS candle request rejected (401/403). Token may be expired.',
+    );
   }
   if (resp.status === 429) {
     throw new BcsMarketDataException('rate_limited', 'BCS rate limited (429). Retrying later.');
@@ -149,9 +194,11 @@ async function fetchBcsCandles(
 }
 
 // ---------------------------------------------------------------------------
-// Public load function
+// Public load functions
 // ---------------------------------------------------------------------------
 
+// Initial chart load — always capped to safe window to prevent large BCS requests.
+// Large presets (e.g. 1Y on 5m) are silently trimmed; older bars load lazily via pan.
 export async function loadBcsCandles(
   ticker: string,
   classCode: string,
@@ -164,11 +211,40 @@ export async function loadBcsCandles(
     throw new BcsMarketDataException('unknown', `Unsupported BCS timeframe: ${timeframe}`);
   }
 
-  const fromIso = new Date(from + 'T00:00:00Z').toISOString();
-  const tillIso = new Date(till + 'T23:59:59Z').toISOString();
+  const safeWindowDays = BCS_SAFE_WINDOW_DAYS[timeframe] ?? 3;
+  const tillMs = new Date(till + 'T23:59:59Z').getTime();
+  const fromMs = new Date(from + 'T00:00:00Z').getTime();
+  const safeFromMs = tillMs - safeWindowDays * 86_400_000;
+  const effectiveFromMs = Math.max(fromMs, safeFromMs);
+
+  const fromIso = new Date(effectiveFromMs).toISOString();
+  const tillIso = new Date(tillMs).toISOString();
 
   const candles = await fetchBcsCandles(ticker, classCode, bcsInterval, fromIso, tillIso);
   // BCS returns bars newest-first; sort ascending for the chart.
+  candles.sort((a, b) => (a.begin < b.begin ? -1 : a.begin > b.begin ? 1 : 0));
+  return candles;
+}
+
+// Lazy older-chunk loader. Fetches one safe window ending just before endDateExclusive.
+// Called by MobileChartPage when the user pans left near the oldest loaded candle.
+export async function loadBcsOlderChunk(
+  ticker: string,
+  classCode: string,
+  timeframe: string,
+  endDateExclusive: Date,
+): Promise<MoexCandle[]> {
+  const bcsInterval = BCS_INTERVAL_MAP[timeframe];
+  if (!bcsInterval) return [];
+
+  const safeWindowDays = BCS_SAFE_WINDOW_DAYS[timeframe] ?? 3;
+  const tillMs  = endDateExclusive.getTime() - 1000; // 1 s before oldest known candle
+  const fromMs  = tillMs - safeWindowDays * 86_400_000;
+
+  const fromIso = new Date(fromMs).toISOString();
+  const tillIso = new Date(tillMs).toISOString();
+
+  const candles = await fetchBcsCandles(ticker, classCode, bcsInterval, fromIso, tillIso);
   candles.sort((a, b) => (a.begin < b.begin ? -1 : a.begin > b.begin ? 1 : 0));
   return candles;
 }
