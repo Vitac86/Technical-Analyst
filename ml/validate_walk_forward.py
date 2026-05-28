@@ -4,12 +4,13 @@ Walk-forward validation for the direction model.
 Uses an expanding window: each fold trains on all data before the validation
 window and evaluates on the next fixed-size chunk.
 
-Reports per-fold accuracy, class distribution, and signal statistics
-(rows where predicted probability exceeds a configurable threshold).
+Supports the same class_balance modes as train_catboost.py (none/balanced/manual).
+Pass --model to validate a specific saved .cbm file instead of re-training per fold.
 
 Usage (from repo root):
     python ml/validate_walk_forward.py
     python ml/validate_walk_forward.py --folds 6 --threshold 0.60
+    python ml/validate_walk_forward.py --model catboost_direction_v2_balanced
 """
 import argparse
 import json
@@ -23,6 +24,7 @@ from sklearn.metrics import accuracy_score, classification_report
 
 from features import FEATURE_COLUMNS
 from labels import CLASS_NAMES, CLASS_TO_INT, LABEL_COL
+from train_catboost import build_catboost_model, build_class_weights
 
 _ML_DIR = Path(__file__).parent
 _REPO_ROOT = _ML_DIR.parent
@@ -61,25 +63,20 @@ def walk_forward_validate(
     config: dict,
     n_folds: int = 5,
     signal_threshold: float = 0.55,
+    pretrained_model: CatBoostClassifier = None,
 ) -> dict:
     """
     Expanding-window walk-forward validation.
 
-    The dataset is split into (n_folds + 1) equal chunks.
-    Fold k trains on chunks 0..k and validates on chunk k+1.
-
-    Args:
-        df:               Dataset sorted by datetime.
-        config:           Training config dict.
-        n_folds:          Number of validation folds.
-        signal_threshold: Min predicted probability to count as a signal.
-
-    Returns:
-        Summary dict with per-fold results and aggregate statistics.
+    If pretrained_model is supplied, uses it for all folds (no re-training).
+    Otherwise re-trains a fresh model per fold using config settings.
     """
     n = len(df)
     chunk = n // (n_folds + 1)
-    cb = config["train"]["catboost"]
+    cb_cfg = config["train"]["catboost"]
+    balance_mode = config.get("train", {}).get("class_balance", {}).get("mode", "none")
+    class_weights = build_class_weights(config) if balance_mode != "none" else None
+
     fold_results = []
 
     for fold_idx in range(n_folds):
@@ -99,15 +96,13 @@ def walk_forward_validate(
         X_val   = val[FEATURE_COLUMNS].values
         y_val   = val[LABEL_COL].values
 
-        model = CatBoostClassifier(
-            loss_function=cb["loss_function"],
-            iterations=cb["iterations"],
-            depth=cb["depth"],
-            learning_rate=cb["learning_rate"],
-            random_seed=cb["random_seed"],
-            verbose=0,
-        )
-        model.fit(Pool(X_train, y_train, feature_names=FEATURE_COLUMNS))
+        if pretrained_model is not None:
+            model = pretrained_model
+        else:
+            fold_cb = dict(cb_cfg)
+            fold_cb["verbose"] = 0
+            model = build_catboost_model(fold_cb, balance_mode, class_weights)
+            model.fit(Pool(X_train, y_train, feature_names=FEATURE_COLUMNS))
 
         preds = model.predict(X_val).flatten().astype(int)
         probas = model.predict_proba(X_val)
@@ -122,6 +117,14 @@ def walk_forward_validate(
         n_signals = int(signal_mask.sum())
         n_long  = int(((preds == CLASS_TO_INT["UP"])   & signal_mask).sum())
         n_short = int(((preds == CLASS_TO_INT["DOWN"]) & signal_mask).sum())
+
+        # Precision of signals that actually fired
+        up_idx = CLASS_TO_INT["UP"]
+        dn_idx = CLASS_TO_INT["DOWN"]
+        long_correct  = int(((preds == up_idx) & signal_mask & (y_val == up_idx)).sum())
+        short_correct = int(((preds == dn_idx) & signal_mask & (y_val == dn_idx)).sum())
+        long_prec  = round(long_correct  / n_long,  4) if n_long  > 0 else None
+        short_prec = round(short_correct / n_short, 4) if n_short > 0 else None
 
         label_dist = {cls: int((y_val == CLASS_TO_INT[cls]).sum()) for cls in CLASS_NAMES}
 
@@ -147,6 +150,8 @@ def walk_forward_validate(
             f"signals_above_{int(signal_threshold * 100)}pct": n_signals,
             "long_signals": n_long,
             "short_signals": n_short,
+            "long_precision_at_threshold": long_prec,
+            "short_precision_at_threshold": short_prec,
         }
         fold_results.append(fold_result)
 
@@ -154,6 +159,7 @@ def walk_forward_validate(
             f"Fold {fold_idx + 1}/{n_folds}  "
             f"train={len(train):,}  val={len(val):,}  "
             f"acc={acc:.4f}  signals={n_signals}  "
+            f"long_prec={long_prec}  short_prec={short_prec}  "
             f"({val_start_date} → {val_end_date})"
         )
 
@@ -162,6 +168,7 @@ def walk_forward_validate(
     return {
         "n_folds_completed": len(fold_results),
         "signal_threshold": signal_threshold,
+        "balance_mode": balance_mode,
         "avg_accuracy": round(avg_acc, 4),
         "folds": fold_results,
     }
@@ -171,8 +178,14 @@ def main():
     parser = argparse.ArgumentParser(description="Walk-forward validation for direction model")
     parser.add_argument("--config", default=None)
     parser.add_argument("--timeframe", default=None)
-    parser.add_argument("--folds", type=int, default=None, help="Override n_folds from config")
-    parser.add_argument("--threshold", type=float, default=None, help="Signal probability threshold")
+    parser.add_argument("--folds", type=int, default=None)
+    parser.add_argument("--threshold", type=float, default=None)
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="Model version name to load (e.g. catboost_direction_v2_balanced). "
+             "If omitted, re-trains per fold.",
+    )
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -183,19 +196,36 @@ def main():
     n_folds = args.folds or wf_cfg.get("n_folds", 5)
     threshold = args.threshold or wf_cfg.get("signal_threshold", 0.55)
 
+    pretrained = None
+    model_name = "retrain_per_fold"
+    if args.model:
+        model_path = _rpath(config["output"]["models_dir"]) / f"{args.model}.cbm"
+        if not model_path.exists():
+            raise FileNotFoundError(f"Model not found: {model_path}")
+        pretrained = CatBoostClassifier()
+        pretrained.load_model(str(model_path))
+        model_name = args.model
+        print(f"Using pretrained model: {model_path}")
+
     df = load_dataset(config)
     print(
         f"Dataset: {len(df):,} rows  "
         f"{df['datetime'].min()} → {df['datetime'].max()}\n"
-        f"Walk-forward: {n_folds} folds, signal threshold={threshold}\n"
+        f"Walk-forward: {n_folds} folds, threshold={threshold}, model={model_name}\n"
     )
 
-    results = walk_forward_validate(df, config, n_folds=n_folds, signal_threshold=threshold)
+    results = walk_forward_validate(
+        df, config, n_folds=n_folds,
+        signal_threshold=threshold,
+        pretrained_model=pretrained,
+    )
+    results["model_name"] = model_name
     print(f"\nAverage accuracy across folds: {results['avg_accuracy']:.4f}")
 
     reports_dir = _rpath(config["output"]["reports_dir"])
     reports_dir.mkdir(parents=True, exist_ok=True)
-    out_path = reports_dir / "catboost_walk_forward_v1.json"
+    suffix = args.model or "retrain"
+    out_path = reports_dir / f"catboost_walk_forward_{suffix}.json"
     with open(out_path, "w") as f:
         json.dump(results, f, indent=2)
     print(f"Report saved: {out_path}")

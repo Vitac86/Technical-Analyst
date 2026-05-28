@@ -36,17 +36,32 @@ output:
 
 # Label creation settings
 label:
-  mode: close          # close | tp_sl (tp_sl not yet implemented)
+  mode: close          # close | tp_sl
   horizon_candles: 3   # look N candles ahead for forward return
   up_threshold_pct: 0.25
   down_threshold_pct: 0.25
-  # fee_bps: 5         # optional transaction cost for TP/SL mode
+  # TP/SL mode settings (used when mode: tp_sl)
+  take_profit_pct: 0.30
+  stop_loss_pct: 0.20
+  flat_if_both_hit_same_candle: true
+  # Store forward return columns for signal evaluation
+  store_future_returns: true
 
 # Training / validation settings
 train:
   train_frac: 0.70
   val_frac: 0.15
   test_frac: 0.15
+  # Class imbalance handling
+  # mode options: none | balanced | manual
+  # balanced → CatBoost auto_class_weights="Balanced"
+  # manual   → explicit weights per class (0=DOWN, 1=FLAT, 2=UP)
+  class_balance:
+    mode: "balanced"
+    manual_weights:
+      DOWN: 3.0
+      FLAT: 1.0
+      UP: 3.0
   catboost:
     loss_function: MultiClass
     iterations: 300
@@ -60,3 +75,6 @@ train:
 walk_forward:
   n_folds: 5
   signal_threshold: 0.55
+
+# Signal threshold analysis thresholds (evaluate_signals.py)
+signal_thresholds: [0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75]

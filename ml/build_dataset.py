@@ -24,7 +24,10 @@ import pandas as pd
 import yaml
 
 from features import FEATURE_COLUMNS, calculate_features, drop_invalid_feature_rows
-from labels import CLASS_NAMES, CLASS_TO_INT, LABEL_COL, create_labels_close
+from labels import (
+    CLASS_NAMES, CLASS_TO_INT, LABEL_COL,
+    create_labels_close, create_labels_tp_sl,
+)
 
 _ML_DIR = Path(__file__).parent
 _REPO_ROOT = _ML_DIR.parent
@@ -97,12 +100,28 @@ def build_ticker_df(
     df = calculate_features(df)
 
     lbl = config["label"]
-    df = create_labels_close(
-        df,
-        horizon_candles=lbl["horizon_candles"],
-        up_threshold_pct=lbl["up_threshold_pct"],
-        down_threshold_pct=lbl["down_threshold_pct"],
-    )
+    mode = lbl.get("mode", "close")
+    store_future = lbl.get("store_future_returns", True)
+
+    if mode == "close":
+        df = create_labels_close(
+            df,
+            horizon_candles=lbl["horizon_candles"],
+            up_threshold_pct=lbl.get("up_threshold_pct", 0.25),
+            down_threshold_pct=lbl.get("down_threshold_pct", 0.25),
+            store_future_returns=store_future,
+        )
+    elif mode == "tp_sl":
+        df = create_labels_tp_sl(
+            df,
+            horizon_candles=lbl["horizon_candles"],
+            take_profit_pct=lbl.get("take_profit_pct", 0.30),
+            stop_loss_pct=lbl.get("stop_loss_pct", 0.20),
+            flat_if_both_hit_same_candle=lbl.get("flat_if_both_hit_same_candle", True),
+            store_future_returns=store_future,
+        )
+    else:
+        raise ValueError(f"Unknown label mode '{mode}'. Use 'close' or 'tp_sl'.")
 
     df = drop_invalid_feature_rows(df)
     df = df.dropna(subset=[LABEL_COL]).reset_index(drop=True)
