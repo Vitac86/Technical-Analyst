@@ -25,7 +25,7 @@ from catboost import CatBoostClassifier, Pool
 from sklearn.metrics import accuracy_score, classification_report
 
 from features import FEATURE_COLUMNS
-from labels import CLASS_NAMES, LABEL_COL
+from labels import CLASS_ID_TO_NAME, CLASS_NAMES, LABEL_COL
 
 _ML_DIR = Path(__file__).parent
 _REPO_ROOT = _ML_DIR.parent
@@ -77,7 +77,11 @@ def evaluate(model: CatBoostClassifier, X: np.ndarray, y: np.ndarray, split_name
     print(f"\n--- {split_name.upper()} ---")
     print(f"Accuracy: {acc:.4f}")
     print(classification_report(y, preds, target_names=CLASS_NAMES))
-    return {"accuracy": round(float(acc), 4), "classification_report": report}
+    return {
+        "accuracy": round(float(acc), 4),
+        "class_id_mapping": CLASS_ID_TO_NAME,
+        "classification_report": report,
+    }
 
 
 def build_manifest(config: dict, feature_importances: dict) -> dict:
@@ -127,7 +131,7 @@ def main():
 
     df = load_dataset(config)
     print(f"Loaded dataset: {len(df):,} rows, {len(FEATURE_COLUMNS)} features")
-    print(f"Date range:     {df['datetime'].min()} → {df['datetime'].max()}")
+    print(f"Date range:     {df['datetime'].min()} -> {df['datetime'].max()}")
     print(f"Tickers:        {sorted(df['ticker'].unique().tolist())}")
 
     train_cfg = config["train"]
@@ -152,7 +156,6 @@ def main():
         eval_metric=cb["eval_metric"],
         random_seed=cb["random_seed"],
         verbose=cb["verbose"],
-        class_names=CLASS_NAMES,
     )
 
     print("\nTraining…")

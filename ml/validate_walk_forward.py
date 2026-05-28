@@ -106,7 +106,6 @@ def walk_forward_validate(
             learning_rate=cb["learning_rate"],
             random_seed=cb["random_seed"],
             verbose=0,
-            class_names=CLASS_NAMES,
         )
         model.fit(Pool(X_train, y_train, feature_names=FEATURE_COLUMNS))
 

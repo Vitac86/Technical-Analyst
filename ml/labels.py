@@ -13,6 +13,10 @@ CLASS_NAMES = ["DOWN", "FLAT", "UP"]
 CLASS_TO_INT = {"DOWN": 0, "FLAT": 1, "UP": 2}
 INT_TO_CLASS = {0: "DOWN", 1: "FLAT", 2: "UP"}
 
+# Canonical helpers — prefer these in new code
+CLASS_ID_TO_NAME = INT_TO_CLASS    # {0: "DOWN", 1: "FLAT", 2: "UP"}
+CLASS_NAME_TO_ID = CLASS_TO_INT    # {"DOWN": 0, "FLAT": 1, "UP": 2}
+
 LABEL_COL = "label"
 
 
