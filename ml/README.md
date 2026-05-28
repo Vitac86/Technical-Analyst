@@ -152,6 +152,7 @@ ml/
   price_action.py              ← structure trend, BoS, ChoCh, sweeps, range features
   backtest_fractals.py         ← rule-based fractal strategy backtest
   experiments_price_action.py  ← CatBoost experiments with PA features
+  backtest_ml_signals.py       ← offline backtest for ML SHORT/LONG signals
 
   data/                        ← gitignored
     raw/                       ← raw 1m CSVs per ticker
@@ -437,6 +438,7 @@ ml/
   price_action.py          ← structure trend, BoS, ChoCh, sweeps, range features
   backtest_fractals.py     ← rule-based strategy backtest (4 strategies)
   experiments_price_action.py  ← CatBoost experiments with PA features (3 experiments)
+  backtest_ml_signals.py   ← offline backtest for ML-generated SHORT/LONG signals
 ```
 
 ### Step 7 — Run fractal backtest
@@ -516,13 +518,196 @@ ml/reports/price_action/summary.json    ← cross-checks vs fractal backtest
 3. `ml/reports/price_action/catboost_pa_short_focused_tp_sl_h12.json`
    — `binary_report.SHORT_precision` and `SHORT_f1` are the key metrics.
 
+### First-run result (raw fractal rules)
+
+All four rule-based strategies were unprofitable in the first backtest:
+
+| Strategy | Trades | WinRate | Cum Net | PF |
+|----------|--------|---------|---------|-----|
+| fractal_breakout_long | ~13,768 | 28% | −2914% | 0.20 |
+| fractal_breakdown_short | ~14,563 | 26% | −3211% | 0.19 |
+| sweep_reversal_long | ~26,380 | 24% | −5615% | 0.16 |
+| sweep_reversal_short | ~23,167 | 26% | −4695% | 0.19 |
+
+**Interpretation:**
+Raw fractal signals alone are not profitable. This is expected — most
+simple price-action rules have been arbitraged away in liquid markets.
+However, this does **not** mean fractal features are useless:
+
+- **Rule-based fractal strategy**: fires a binary signal from a rule.
+  Failed here — rules are too simple and produce too many false entries.
+
+- **Fractal features for ML**: adds structural context to a CatBoost model
+  alongside 30 technical indicators. The ML model learns non-linear
+  combinations of features. Tested in `experiments_price_action.py`.
+
+Each per-strategy report now includes an `inverted_diagnostic` field that
+simulates the same entries but in the opposite direction. This checks whether
+the rule has "anti-signal" value (if inverted is profitable, the original
+rule is consistently wrong and a flipped version may be worth exploring).
+Inverted results are diagnostics only — not automatically tradable.
+
+### Promising criteria
+
+A strategy is marked `promising=true` only if **all** of the following hold:
+
+| Criterion | Threshold |
+|-----------|-----------|
+| Total trades | ≥ 200 |
+| Ticker diversity | ≥ 3 tickers |
+| Profit factor | > 1.05 |
+| Average net return | > 0% |
+| Cumulative net return | > 0% |
+| Max drawdown | not catastrophic (< 3× cumulative return) |
+
+`rejection_reasons` in each strategy row explains exactly why it failed.
+
 ### Why this is research only
 
 - Signals need out-of-sample stability across tickers before use.
-- A strategy is considered promising only if `total_trades ≥ 200` and
-  trades span at least 3 different tickers.
+- A strategy is considered promising only if it meets all criteria above.
 - Profit factor must be consistent across tickers, not driven by one outlier.
 - **No APK integration until these criteria are met.**
+
+### Binary short-focused experiment
+
+Experiment 3 (`catboost_pa_short_focused_tp_sl_h12`) trains a binary
+CatBoost classifier:
+- **Class 1** = SHORT_SETUP (original DOWN label from tp_sl labelling)
+- **Class 0** = NOT_SHORT
+- Loss function: `Logloss` (binary-compatible)
+- Eval metric: `AUC` (binary-compatible)
+- No `MultiClass`, `classes_count`, or multiclass-specific metrics
+
+This avoids the CatBoost error that occurs when binary and multiclass
+parameters are mixed. Key metrics: `SHORT_precision`, `SHORT_recall`,
+`SHORT_f1` in the binary report.
+
+---
+
+## Step 9 — ML signal backtest
+
+After training the price-action CatBoost experiments, verify whether their
+generated SHORT/LONG signals have **positive net expectancy** after trading costs.
+
+### Why raw fractal rules failed
+
+All four rule-based strategies in `backtest_fractals.py` were unprofitable:
+
+| Strategy | Profit Factor | Avg Net Return |
+|----------|--------------|----------------|
+| fractal_breakout_long | 0.20 | −0.21% |
+| fractal_breakdown_short | 0.19 | −0.22% |
+| sweep_reversal_long | 0.16 | −0.21% |
+| sweep_reversal_short | 0.19 | −0.20% |
+
+Simple price-action rules produce too many false entries on liquid MOEX equities.
+**Do not further optimise standalone fractal rules.** Fractal and price-action
+features may still add value as context features inside an ML model.
+
+### ML SHORT signals — separate backtest
+
+`backtest_ml_signals.py` loads trained model binaries, reproduces the exact
+feature pipeline from `experiments_price_action.py` (same labels, same PA
+features, same time-split), and runs trades only on the **test split** to
+avoid look-ahead bias.
+
+Two models are tested:
+
+| Model | Classifier | Focus |
+|-------|-----------|-------|
+| `catboost_pa_tp_sl_h12_tp040_sl025_balanced` | Multiclass (DOWN/FLAT/UP) | SHORT + LONG signals |
+| `catboost_pa_short_focused_tp_sl_h12` | Binary (SHORT_SETUP vs NOT) | SHORT signals only |
+
+Signal rules:
+
+- **Multiclass**: SHORT if P(DOWN) ≥ threshold and P(DOWN) > P(UP); LONG if P(UP) ≥ threshold and P(UP) > P(DOWN)
+- **Binary short**: SHORT if P(SHORT_SETUP=1) ≥ threshold
+
+Thresholds tested: 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75
+
+### Conservative TP/SL assumptions
+
+| Assumption | Value |
+|-----------|-------|
+| Horizon | 12 candles (5m bars) |
+| Take profit (SHORT) | future low ≤ entry × (1 − 0.40%) |
+| Stop loss (SHORT) | future high ≥ entry × (1 + 0.25%) |
+| Same-candle both hit | SL wins (conservative) |
+| Neither hit | exit at horizon-bar close |
+| Commission | 5 bps per leg |
+| Slippage | 5 bps per leg |
+| Round-trip cost | 0.20% (2 × 10 bps) |
+
+### First run — save models, then backtest
+
+```
+# Step 1: train experiments and save model binaries
+python ml\experiments_price_action.py
+
+# Step 2: backtest all models across all thresholds
+python ml\backtest_ml_signals.py --all
+
+# Or backtest a single model
+python ml\backtest_ml_signals.py --model catboost_pa_tp_sl_h12_tp040_sl025_balanced
+python ml\backtest_ml_signals.py --model catboost_pa_short_focused_tp_sl_h12
+```
+
+If model binaries are missing you will see:
+```
+Model file not found. Run python ml\experiments_price_action.py first.
+```
+
+### Outputs
+
+```
+ml/reports/ml_signal_backtests/
+  catboost_pa_tp_sl_h12_tp040_sl025_balanced_backtest.json
+  catboost_pa_short_focused_tp_sl_h12_backtest.json
+  summary.json      ← start here
+```
+
+`summary.json` contains:
+
+- `overall_conclusion` — clear statement on whether any setup is profitable
+- `best_by_profit_factor` — best setup by PF among those with ≥200 trades
+- `best_by_cumulative_net_return` — best setup by total return
+- `best_short_setup` — best setup with ≥200 SHORT trades by PF
+- `all_promising_setups` — list of setups meeting all criteria
+- `rejection_reasons_by_setup` — why each setup failed (if any failed)
+
+Per-model reports include for each threshold:
+- total/long/short signal counts
+- win rate, avg gross/net return, median net return
+- cumulative net return, profit factor, max drawdown
+- best/worst trade, avg holding candles
+- take_profit / stopped_out / horizon_exit counts
+- per-ticker and monthly breakdowns
+- LONG-only and SHORT-only side metrics
+
+### Promising criteria
+
+A model+threshold setup is marked `promising=true` only when **all** hold:
+
+| Criterion | Threshold |
+|-----------|-----------|
+| Total trades | ≥ 200 |
+| SHORT trades | ≥ 200 (primary focus is SHORT side) |
+| Profit factor | > 1.05 |
+| Average net return | > 0% |
+| Cumulative net return | > 0% |
+| Ticker concentration | ≤ 50% in any single ticker |
+| Ticker diversity | ≥ 3 tickers with trades |
+
+If **no setup is promising**, the summary says so explicitly.
+Do not force a positive conclusion.
+
+### APK integration policy
+
+APK integration is on hold until a backtest setup meets all promising criteria
+with consistent performance across tickers and months. Classification metrics
+alone (precision, F1) are insufficient — positive net expectancy after costs
+is required.
 
 ---
 

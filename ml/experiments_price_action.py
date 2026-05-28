@@ -13,8 +13,13 @@ Experiments
 
 3. catboost_pa_short_focused_tp_sl_h12
    Binary classifier: SHORT_SETUP (label==DOWN) vs NOT_SHORT
-   tp_sl label  horizon=12  TP=0.40%  SL=0.25%  balanced
+   tp_sl label  horizon=12  TP=0.40%  SL=0.25%
+   Uses Logloss + AUC; no MultiClass params.
    Motivated by prior finding that SHORT signals are more promising.
+
+Resilience:
+  Per-experiment errors are caught and stored. The summary JSON is always
+  written, even if all experiments fail.
 
 Usage (from repo root):
     python ml\\experiments_price_action.py
@@ -30,6 +35,7 @@ import copy
 import json
 import sys
 import time
+import traceback
 from pathlib import Path
 
 import numpy as np
@@ -39,7 +45,6 @@ from catboost import CatBoostClassifier, Pool
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
-    confusion_matrix,
     f1_score,
     precision_score,
     recall_score,
@@ -59,7 +64,7 @@ from labels import (
 from price_action import add_price_action_features_grouped, PRICE_ACTION_FEATURE_COLUMNS
 from train_catboost import (
     build_catboost_model, build_class_weights,
-    compute_confusion_matrix, compute_feature_importance,
+    compute_confusion_matrix,
     time_split,
 )
 
@@ -69,42 +74,97 @@ from train_catboost import (
 
 EXPERIMENTS = [
     {
-        "id":   1,
-        "name": "catboost_pa_close_h6_thr020_balanced",
+        "id":         1,
+        "name":       "catboost_pa_close_h6_thr020_balanced",
         "label": {
-            "mode":             "close",
-            "horizon_candles":  6,
-            "up_threshold_pct": 0.20,
+            "mode":               "close",
+            "horizon_candles":    6,
+            "up_threshold_pct":   0.20,
             "down_threshold_pct": 0.20,
         },
         "balance_mode": "balanced",
         "classifier":   "multiclass",
     },
     {
-        "id":   2,
-        "name": "catboost_pa_tp_sl_h12_tp040_sl025_balanced",
+        "id":         2,
+        "name":       "catboost_pa_tp_sl_h12_tp040_sl025_balanced",
         "label": {
-            "mode":             "tp_sl",
-            "horizon_candles":  12,
-            "take_profit_pct":  0.40,
-            "stop_loss_pct":    0.25,
+            "mode":            "tp_sl",
+            "horizon_candles": 12,
+            "take_profit_pct": 0.40,
+            "stop_loss_pct":   0.25,
         },
         "balance_mode": "balanced",
         "classifier":   "multiclass",
     },
     {
-        "id":   3,
-        "name": "catboost_pa_short_focused_tp_sl_h12",
+        "id":         3,
+        "name":       "catboost_pa_short_focused_tp_sl_h12",
         "label": {
-            "mode":             "tp_sl",
-            "horizon_candles":  12,
-            "take_profit_pct":  0.40,
-            "stop_loss_pct":    0.25,
+            "mode":            "tp_sl",
+            "horizon_candles": 12,
+            "take_profit_pct": 0.40,
+            "stop_loss_pct":   0.25,
         },
-        "balance_mode": "balanced",   # applied to binary labels
-        "classifier":   "binary",     # SHORT_SETUP vs NOT_SHORT
+        "balance_mode": "balanced",
+        "classifier":   "binary_short",   # SHORT_SETUP vs NOT_SHORT; uses Logloss+AUC
     },
 ]
+
+# Keys that are MultiClass-specific and must not be passed to a binary model
+_MULTICLASS_ONLY_KEYS = {"eval_metric", "classes_count", "class_names", "custom_metric"}
+
+
+# ---------------------------------------------------------------------------
+# Feature importance normalisation
+# ---------------------------------------------------------------------------
+
+def normalize_feature_importance(raw_fi) -> list:
+    """
+    Return feature importance as a stable list of dicts:
+        [{"feature": "atr_14", "importance": 12.34}, ...]
+
+    Handles:
+      - list of dicts with "feature" key (preferred format)
+      - list of [name, value] pairs (JSON-serialised tuples)
+      - dict {"all_features": {name: val}, "top_features": {}} (old train_catboost format)
+      - None / empty → returns []
+    """
+    if not raw_fi:
+        return []
+
+    if isinstance(raw_fi, list):
+        result = []
+        for x in raw_fi:
+            if isinstance(x, dict) and "feature" in x:
+                result.append({
+                    "feature":    str(x["feature"]),
+                    "importance": float(x.get("importance", 0)),
+                })
+            elif isinstance(x, (list, tuple)) and len(x) >= 2:
+                result.append({
+                    "feature":    str(x[0]),
+                    "importance": float(x[1]),
+                })
+            # Skip unexpected item types silently
+        return result
+
+    if isinstance(raw_fi, dict):
+        # Old format from train_catboost.compute_feature_importance
+        features_dict = raw_fi.get("top_features") or raw_fi.get("all_features") or {}
+        if isinstance(features_dict, dict):
+            pairs = sorted(features_dict.items(), key=lambda kv: kv[1], reverse=True)
+            return [{"feature": str(k), "importance": float(v)} for k, v in pairs]
+
+    return []
+
+
+def _compute_fi_list(model: CatBoostClassifier) -> list:
+    """Compute feature importance from a trained model as a sorted list of dicts."""
+    names = model.feature_names_
+    vals  = model.get_feature_importance()
+    pairs = sorted(zip(names, vals), key=lambda kv: kv[1], reverse=True)
+    return [{"feature": str(n), "importance": round(float(v), 4)} for n, v in pairs]
 
 
 # ---------------------------------------------------------------------------
@@ -124,10 +184,10 @@ def _rpath(rel: str, base: Path = _REPO_ROOT) -> Path:
 
 
 def load_features_only(config: dict) -> pd.DataFrame:
-    tf          = config["timeframe"]
-    proc_dir    = _rpath(config["output"]["processed_dir"])
-    parquet     = proc_dir / f"dataset_{tf}.parquet"
-    csv_path    = parquet.with_suffix(".csv")
+    tf       = config["timeframe"]
+    proc_dir = _rpath(config["output"]["processed_dir"])
+    parquet  = proc_dir / f"dataset_{tf}.parquet"
+    csv_path = parquet.with_suffix(".csv")
 
     if parquet.exists():
         df = pd.read_parquet(parquet)
@@ -148,7 +208,7 @@ def apply_labels(df: pd.DataFrame, label_cfg: dict) -> pd.DataFrame:
     df = df.drop(columns=[c for c in drop_cols if c in df.columns])
 
     frames = []
-    for ticker, grp in df.groupby("ticker", sort=False):
+    for _, grp in df.groupby("ticker", sort=False):
         grp = grp.sort_values("datetime").reset_index(drop=True)
         if mode == "close":
             grp = create_labels_close(
@@ -188,8 +248,22 @@ def drop_invalid_pa_rows(df: pd.DataFrame, feature_cols: list) -> pd.DataFrame:
     bad  = feat.isna().any(axis=1)
     n_dropped = int(bad.sum())
     if n_dropped:
-        print(f"  Dropping {n_dropped} rows with NaN/inf in PA features.")
+        print(f"  Dropping {n_dropped} rows with NaN/inf in features.")
     return df[~bad].reset_index(drop=True)
+
+
+def _build_binary_catboost_cfg(cb_cfg_raw: dict) -> dict:
+    """
+    Build a CatBoostClassifier kwargs dict safe for binary (Logloss) training.
+
+    Removes all MultiClass-specific keys and sets loss_function=Logloss,
+    eval_metric=AUC to avoid CatBoost's binary/multiclass conflict error.
+    """
+    cfg = {k: v for k, v in cb_cfg_raw.items() if k not in _MULTICLASS_ONLY_KEYS}
+    cfg["loss_function"] = "Logloss"
+    cfg["eval_metric"]   = "AUC"
+    cfg.pop("classes_count", None)
+    return cfg
 
 
 # ---------------------------------------------------------------------------
@@ -202,10 +276,10 @@ def run_experiment(
     df_features: pd.DataFrame,
     thresholds: list,
 ) -> dict:
-    name        = exp["name"]
-    label_cfg   = exp["label"]
+    name         = exp["name"]
+    label_cfg    = exp["label"]
     balance_mode = exp.get("balance_mode", "balanced")
-    classifier  = exp.get("classifier", "multiclass")
+    classifier   = exp.get("classifier", "multiclass")
 
     print(f"\n{'='*64}")
     print(f"Experiment: {name}  [{classifier}]")
@@ -224,43 +298,43 @@ def run_experiment(
     print("  Adding fractal + price action features…")
     df = add_pa_features(df)
 
-    # 3. Combined feature list
+    # 3. Combined feature list (original 30 + PA features, deduped, ordered)
     all_feature_cols = FEATURE_COLUMNS + [
         c for c in PRICE_ACTION_FEATURE_COLUMNS if c not in FEATURE_COLUMNS
     ]
-
-    # Drop rows where any feature is NaN/inf
     df = drop_invalid_pa_rows(df, all_feature_cols)
-    print(f"  After PA feature drop: {len(df):,} rows")
+    print(f"  After feature validation: {len(df):,} rows")
 
     # 4. Time split
     train_cfg = config["train"]
     train, val, test = time_split(df, train_cfg["train_frac"], train_cfg["val_frac"])
 
-    # 5. Build model
-    cb_cfg = dict(train_cfg["catboost"])
-    cb_cfg["verbose"] = 0
+    # 5. Raw catboost params from config
+    cb_cfg_raw = dict(train_cfg["catboost"])
+    cb_cfg_raw["verbose"] = 0
 
-    if classifier == "binary":
-        # Convert to binary: 1 = SHORT_SETUP (DOWN=0 in original), 0 = NOT_SHORT
+    # -------------------------------------------------------------------------
+    # Binary path: SHORT_SETUP (DOWN=0) vs NOT_SHORT
+    # -------------------------------------------------------------------------
+    if classifier == "binary_short":
         y_train_bin = (train[LABEL_COL].values == CLASS_TO_INT["DOWN"]).astype(int)
         y_val_bin   = (val[LABEL_COL].values   == CLASS_TO_INT["DOWN"]).astype(int)
         y_test_bin  = (test[LABEL_COL].values  == CLASS_TO_INT["DOWN"]).astype(int)
 
-        bin_cfg = dict(cb_cfg)
-        bin_cfg["loss_function"] = "Logloss"
-        bin_cfg.pop("classes_count", None)
+        pos_count = int(y_train_bin.sum())
+        neg_count = int(len(y_train_bin) - pos_count)
+        scale_pos = float(neg_count) / float(pos_count) if pos_count > 0 else 1.0
 
-        pos_count = y_train_bin.sum()
-        neg_count = len(y_train_bin) - pos_count
-        scale_pos = neg_count / pos_count if pos_count > 0 else 1.0
+        bin_cfg = _build_binary_catboost_cfg(cb_cfg_raw)
 
         model = CatBoostClassifier(
             **bin_cfg,
             scale_pos_weight=scale_pos,
         )
+
         X_train = train[all_feature_cols].values
         X_val   = val[all_feature_cols].values
+        X_test  = test[all_feature_cols].values
 
         model.fit(
             Pool(X_train, y_train_bin, feature_names=all_feature_cols),
@@ -268,58 +342,56 @@ def run_experiment(
             use_best_model=True,
         )
 
-        X_test  = test[all_feature_cols].values
-        preds   = model.predict(X_test).flatten().astype(int)
-        probas  = model.predict_proba(X_test)  # shape (n, 2)
+        preds = model.predict(X_test).flatten().astype(int)
 
-        prec  = round(float(precision_score(y_test_bin, preds, zero_division=0)), 4)
-        rec   = round(float(recall_score(y_test_bin, preds, zero_division=0)), 4)
-        f1    = round(float(f1_score(y_test_bin, preds, zero_division=0)), 4)
-        acc   = round(float(accuracy_score(y_test_bin, preds)), 4)
+        prec = round(float(precision_score(y_test_bin, preds, zero_division=0)), 4)
+        rec  = round(float(recall_score(y_test_bin,  preds, zero_division=0)), 4)
+        f1   = round(float(f1_score(y_test_bin,      preds, zero_division=0)), 4)
+        acc  = round(float(accuracy_score(y_test_bin, preds)), 4)
 
-        report = {
+        binary_report = {
             "SHORT_precision": prec,
             "SHORT_recall":    rec,
             "SHORT_f1":        f1,
             "accuracy":        acc,
-            "class_0_count":   int((y_test_bin == 0).sum()),
-            "class_1_count":   int((y_test_bin == 1).sum()),
+            "test_class_0_count": int((y_test_bin == 0).sum()),
+            "test_class_1_count": int((y_test_bin == 1).sum()),
         }
 
-        fi_names = model.feature_names_
-        fi_vals  = model.get_feature_importance()
-        fi_pairs = sorted(zip(fi_names, fi_vals), key=lambda x: x[1], reverse=True)
-        fi_data  = [{"feature": n, "importance": round(float(v), 4)} for n, v in fi_pairs]
+        fi_data = _compute_fi_list(model)
 
         elapsed = round(time.time() - t0, 1)
         print(f"  SHORT precision={prec:.3f}  recall={rec:.3f}  F1={f1:.3f}  elapsed={elapsed}s")
 
-        result = {
+        return {
             "experiment":       name,
             "id":               exp["id"],
-            "classifier":       "binary",
+            "classifier":       "binary_short",
             "label_config":     label_cfg,
             "balance_mode":     balance_mode,
-            "scale_pos_weight": round(float(scale_pos), 3),
+            "scale_pos_weight": round(scale_pos, 3),
             "labeled_rows":     len(df),
             "label_distribution": label_dist,
             "test_rows":        len(test),
-            "binary_report":    report,
+            "binary_report":    binary_report,
             "feature_importance": fi_data,
             "elapsed_seconds":  elapsed,
-        }
-        return result, model
+        }, model
 
-    # --- Multiclass path ---
+    # -------------------------------------------------------------------------
+    # Multiclass path
+    # -------------------------------------------------------------------------
     exp_config = copy.deepcopy(config)
     exp_config["train"]["class_balance"]["mode"] = balance_mode
     class_weights = build_class_weights(exp_config) if balance_mode != "none" else None
-    model = build_catboost_model(cb_cfg, balance_mode, class_weights)
+    model = build_catboost_model(cb_cfg_raw, balance_mode, class_weights)
 
     X_train = train[all_feature_cols].values
     y_train = train[LABEL_COL].values
     X_val   = val[all_feature_cols].values
     y_val   = val[LABEL_COL].values
+    X_test  = test[all_feature_cols].values
+    y_test  = test[LABEL_COL].values
 
     model.fit(
         Pool(X_train, y_train, feature_names=all_feature_cols),
@@ -327,17 +399,14 @@ def run_experiment(
         use_best_model=True,
     )
 
-    X_test  = test[all_feature_cols].values
-    y_test  = test[LABEL_COL].values
     preds   = model.predict(X_test).flatten().astype(int)
     acc     = accuracy_score(y_test, preds)
     report  = classification_report(
         y_test, preds, target_names=CLASS_NAMES, output_dict=True, zero_division=0
     )
 
-    cm_data = compute_confusion_matrix(y_test, preds)
-    fi_data = compute_feature_importance(model, top_n=len(all_feature_cols))
-
+    cm_data     = compute_confusion_matrix(y_test, preds)
+    fi_data     = _compute_fi_list(model)
     probas      = model.predict_proba(X_test)
     thr_results = [analyze_threshold(test, probas, thr) for thr in thresholds]
     per_ticker  = analyze_per_ticker(test, probas, thresholds)
@@ -349,43 +418,44 @@ def run_experiment(
             r = report[cls]
             print(f"  {cls}: precision={r['precision']:.3f}  recall={r['recall']:.3f}")
 
-    result = {
-        "experiment":              name,
-        "id":                      exp["id"],
-        "classifier":              "multiclass",
-        "label_config":            label_cfg,
-        "balance_mode":            balance_mode,
-        "labeled_rows":            len(df),
-        "label_distribution":      label_dist,
-        "test_rows":               len(test),
-        "test_accuracy":           round(float(acc), 4),
+    return {
+        "experiment":                 name,
+        "id":                         exp["id"],
+        "classifier":                 "multiclass",
+        "label_config":               label_cfg,
+        "balance_mode":               balance_mode,
+        "labeled_rows":               len(df),
+        "label_distribution":         label_dist,
+        "test_rows":                  len(test),
+        "test_accuracy":              round(float(acc), 4),
         "test_classification_report": report,
         **cm_data,
-        "signal_analysis":         thr_results,
-        "per_ticker":              per_ticker,
-        "feature_importance":      fi_data,
-        "elapsed_seconds":         elapsed,
-    }
-    return result, model
+        "signal_analysis":            thr_results,
+        "per_ticker":                 per_ticker,
+        "feature_importance":         fi_data,
+        "elapsed_seconds":            elapsed,
+    }, model
 
 
 # ---------------------------------------------------------------------------
-# Summary
+# Summary helpers
 # ---------------------------------------------------------------------------
 
 def build_summary_row(result: dict) -> dict:
     classifier = result.get("classifier", "multiclass")
-    if classifier == "binary":
+
+    if classifier == "binary_short":
         rep = result.get("binary_report", {})
         return {
-            "experiment":        result["experiment"],
-            "classifier":        "binary",
-            "label_mode":        result["label_config"].get("mode"),
-            "horizon":           result["label_config"].get("horizon_candles"),
-            "SHORT_precision":   rep.get("SHORT_precision"),
-            "SHORT_recall":      rep.get("SHORT_recall"),
-            "SHORT_f1":          rep.get("SHORT_f1"),
-            "accuracy":          rep.get("accuracy"),
+            "experiment":      result["experiment"],
+            "classifier":      "binary_short",
+            "label_mode":      result["label_config"].get("mode"),
+            "horizon":         result["label_config"].get("horizon_candles"),
+            "SHORT_precision": rep.get("SHORT_precision"),
+            "SHORT_recall":    rep.get("SHORT_recall"),
+            "SHORT_f1":        rep.get("SHORT_f1"),
+            "accuracy":        rep.get("accuracy"),
+            "status":          "completed",
         }
 
     rep      = result.get("test_classification_report", {})
@@ -398,20 +468,25 @@ def build_summary_row(result: dict) -> dict:
         c = r.get("short_signals", 0)
         if p is not None and c >= 20 and p > best_prec:
             best_prec  = p
-            best_short = {"threshold": r["threshold"], "short_precision": p, "short_signals": c}
+            best_short = {
+                "threshold":       r["threshold"],
+                "short_precision": p,
+                "short_signals":   c,
+            }
 
     return {
-        "experiment":       result["experiment"],
-        "classifier":       "multiclass",
-        "label_mode":       result["label_config"].get("mode"),
-        "horizon":          result["label_config"].get("horizon_candles"),
-        "balance_mode":     result.get("balance_mode"),
-        "test_accuracy":    result.get("test_accuracy"),
-        "DOWN_precision":   round(float(rep.get("DOWN", {}).get("precision", 0)), 4),
-        "DOWN_recall":      round(float(rep.get("DOWN", {}).get("recall",    0)), 4),
-        "UP_precision":     round(float(rep.get("UP",   {}).get("precision", 0)), 4),
-        "UP_recall":        round(float(rep.get("UP",   {}).get("recall",    0)), 4),
-        "best_short_signal_threshold": best_short,
+        "experiment":                   result["experiment"],
+        "classifier":                   "multiclass",
+        "label_mode":                   result["label_config"].get("mode"),
+        "horizon":                      result["label_config"].get("horizon_candles"),
+        "balance_mode":                 result.get("balance_mode"),
+        "test_accuracy":                result.get("test_accuracy"),
+        "DOWN_precision":               round(float(rep.get("DOWN", {}).get("precision", 0)), 4),
+        "DOWN_recall":                  round(float(rep.get("DOWN", {}).get("recall",    0)), 4),
+        "UP_precision":                 round(float(rep.get("UP",   {}).get("precision", 0)), 4),
+        "UP_recall":                    round(float(rep.get("UP",   {}).get("recall",    0)), 4),
+        "best_short_signal_threshold":  best_short,
+        "status":                       "completed",
     }
 
 
@@ -425,57 +500,84 @@ def _load_fractal_backtest_summary(reports_root: Path) -> dict:
 
 def build_cross_summary(
     ml_rows: list,
+    failed_experiments: list,
     fractal_summary: dict,
     reports_dir: Path,
 ) -> dict:
     """Combine ML experiment results with fractal backtest results."""
-    # Top fractal features by importance (from exp 1 or 2 if available)
+    # Top PA features by importance (from first successful multiclass experiment)
     top_pa_features = []
     for row in ml_rows:
-        if row.get("classifier") == "multiclass":
-            fi = None
-            # Try to load full result from disk
-            exp_name = row.get("experiment", "")
-            exp_file = reports_dir / f"{exp_name}.json"
-            if exp_file.exists():
-                with open(exp_file) as f:
-                    full = json.load(f)
-                fi = full.get("feature_importance", [])
-            if fi:
-                pa_fi = [
-                    x for x in fi
-                    if x["feature"] not in set(FEATURE_COLUMNS)
-                ][:10]
+        if row.get("classifier") != "multiclass" or row.get("status") != "completed":
+            continue
+        exp_name = row.get("experiment", "")
+        exp_file = reports_dir / f"{exp_name}.json"
+        if not exp_file.exists():
+            continue
+        with open(exp_file) as f:
+            full = json.load(f)
+        fi_raw = full.get("feature_importance", [])
+        fi     = normalize_feature_importance(fi_raw)
+        if fi:
+            pa_fi = [
+                x for x in fi
+                if x.get("feature") not in set(FEATURE_COLUMNS)
+            ][:10]
+            if pa_fi:
                 top_pa_features = pa_fi
                 break
 
-    # Best SHORT-focused result
-    best_short_exp = None
-    best_short_prec = -1.0
+    # Best multiclass and binary experiments
+    best_multiclass = None
+    best_binary     = None
+    best_down_prec  = -1.0
+    best_f1         = -1.0
+
     for row in ml_rows:
-        p = row.get("SHORT_precision") or row.get("DOWN_precision") or 0.0
-        if p > best_short_prec:
-            best_short_prec = p
-            best_short_exp  = row.get("experiment")
+        if row.get("status") != "completed":
+            continue
+        if row.get("classifier") == "multiclass":
+            p = row.get("DOWN_precision") or 0.0
+            if p > best_down_prec:
+                best_down_prec  = p
+                best_multiclass = row.get("experiment")
+        elif row.get("classifier") == "binary_short":
+            f = row.get("SHORT_f1") or 0.0
+            if f > best_f1:
+                best_f1     = f
+                best_binary = row.get("experiment")
 
+    # Fractal backtest summary
     frac_strategies = fractal_summary.get("strategies", [])
-    best_by_net = fractal_summary.get("best_by_cumulative_net")
-    best_by_pf  = fractal_summary.get("best_by_profit_factor")
-
     promising = [s["strategy"] for s in frac_strategies if s.get("promising")]
+
+    if ml_rows:
+        any_good_short = best_down_prec > 0.45 or best_f1 > 0.30
+        ml_conclusion = (
+            "Short-focused features show potential — review precision/F1 before use."
+            if any_good_short
+            else "ML experiments completed. Review DOWN/SHORT precision in individual reports."
+        )
+    else:
+        ml_conclusion = "No experiments completed successfully."
 
     return {
         "fractal_backtest": {
-            "best_by_cumulative_net_return": best_by_net,
-            "best_by_profit_factor":         best_by_pf,
-            "promising_strategies":          promising,
-            "note": fractal_summary.get("note", ""),
+            "any_promising":           fractal_summary.get("any_promising", False),
+            "overall_conclusion":      fractal_summary.get("overall_conclusion", ""),
+            "best_by_cumulative_net":  fractal_summary.get("best_strategy_by_cumulative_net"),
+            "best_by_profit_factor":   fractal_summary.get("best_strategy_by_profit_factor"),
+            "promising_strategies":    promising,
         },
         "ml_experiments": {
-            "best_by_short_precision":  best_short_exp,
-            "best_short_precision":     round(best_short_prec, 4) if best_short_prec >= 0 else None,
-            "summary_rows":             ml_rows,
+            "best_multiclass_experiment":    best_multiclass,
+            "best_binary_short_experiment":  best_binary,
+            "best_multiclass_down_precision": round(best_down_prec, 4) if best_down_prec >= 0 else None,
+            "best_binary_short_f1":          round(best_f1, 4) if best_f1 >= 0 else None,
+            "overall_conclusion":            ml_conclusion,
+            "summary_rows":                  ml_rows,
         },
+        "failed_experiments":                      failed_experiments,
         "top_price_action_features_by_importance": top_pa_features,
         "research_status": "offline only — not integrated into APK",
     }
@@ -486,9 +588,11 @@ def build_cross_summary(
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="CatBoost experiments with price action features")
-    parser.add_argument("--config",      default=None)
-    parser.add_argument("--timeframe",   default=None)
+    parser = argparse.ArgumentParser(
+        description="CatBoost experiments with price action features"
+    )
+    parser.add_argument("--config",    default=None)
+    parser.add_argument("--timeframe", default=None)
     parser.add_argument(
         "--experiments",
         nargs="+", type=int, default=None,
@@ -514,59 +618,84 @@ def main():
     print(f"Experiments to run: {[e['name'] for e in selected]}")
     if args.dry_run:
         for e in selected:
-            print(f"  [{e['id']}] {e['name']}  classifier={e['classifier']}  label={e['label']}")
+            print(
+                f"  [{e['id']}] {e['name']}  "
+                f"classifier={e['classifier']}  label={e['label']}"
+            )
         return
 
     reports_dir = _rpath(config["output"]["reports_dir"]) / "price_action"
     reports_dir.mkdir(parents=True, exist_ok=True)
 
+    models_dir = _rpath(config["output"]["models_dir"])
+    models_dir.mkdir(parents=True, exist_ok=True)
+
     print("\nLoading feature dataset…")
     df_features = load_features_only(config)
     print(f"  {len(df_features):,} rows loaded")
 
-    summary_rows = []
+    summary_rows       = []
+    failed_experiments = []
+
     for exp in selected:
         try:
-            result, _ = run_experiment(exp, config, df_features, thresholds)
+            result, model = run_experiment(exp, config, df_features, thresholds)
             out_path  = reports_dir / f"{exp['name']}.json"
-            # Do not overwrite unless the file does not exist, or always write fresh results.
             with open(out_path, "w") as f:
                 json.dump(result, f, indent=2)
             print(f"  Saved: {out_path}")
+            model_path = models_dir / f"{exp['name']}.cbm"
+            model.save_model(str(model_path))
+            print(f"  Model saved: {model_path}")
             summary_rows.append(build_summary_row(result))
         except Exception as exc:
-            import traceback
             print(f"  [ERROR] {exp['name']}: {exc}")
             traceback.print_exc()
+            failed_experiments.append({
+                "experiment": exp["name"],
+                "status":     "failed",
+                "error":      str(exc),
+            })
 
-    if not summary_rows:
-        print("No experiments completed — no summary written.")
-        return
-
-    # Cross-summary with fractal backtest (if available)
-    fractal_summary = _load_fractal_backtest_summary(_rpath(config["output"]["reports_dir"]))
-    cross = build_cross_summary(summary_rows, fractal_summary, reports_dir)
+    # Always write summary — even if all experiments failed
+    fractal_summary = _load_fractal_backtest_summary(
+        _rpath(config["output"]["reports_dir"])
+    )
+    cross = build_cross_summary(
+        summary_rows, failed_experiments, fractal_summary, reports_dir
+    )
 
     summary_path = reports_dir / "summary.json"
     with open(summary_path, "w") as f:
         json.dump(cross, f, indent=2)
     print(f"\nCross-summary saved: {summary_path}")
 
-    # Print comparison table
-    print("\n--- EXPERIMENT SUMMARY ---")
-    for row in summary_rows:
-        print(f"\n  {row['experiment']} [{row.get('classifier')}]")
-        if row.get("classifier") == "binary":
-            print(f"    SHORT precision={row.get('SHORT_precision')}  "
-                  f"recall={row.get('SHORT_recall')}  F1={row.get('SHORT_f1')}")
-        else:
-            print(f"    accuracy={row.get('test_accuracy')}  "
-                  f"DOWN: P={row.get('DOWN_precision')} R={row.get('DOWN_recall')}  "
-                  f"UP: P={row.get('UP_precision')} R={row.get('UP_recall')}")
-            if row.get("best_short_signal_threshold"):
-                bs = row["best_short_signal_threshold"]
-                print(f"    best SHORT signal: thr={bs['threshold']}  "
-                      f"precision={bs['short_precision']}  n={bs['short_signals']}")
+    if failed_experiments:
+        print(f"\nFailed experiments ({len(failed_experiments)}):")
+        for fe in failed_experiments:
+            print(f"  {fe['experiment']}: {fe['error'][:120]}")
+
+    if summary_rows:
+        print("\n--- EXPERIMENT SUMMARY ---")
+        for row in summary_rows:
+            print(f"\n  {row['experiment']} [{row.get('classifier')}]")
+            if row.get("classifier") == "binary_short":
+                print(
+                    f"    SHORT precision={row.get('SHORT_precision')}  "
+                    f"recall={row.get('SHORT_recall')}  F1={row.get('SHORT_f1')}"
+                )
+            else:
+                print(
+                    f"    accuracy={row.get('test_accuracy')}  "
+                    f"DOWN: P={row.get('DOWN_precision')} R={row.get('DOWN_recall')}  "
+                    f"UP: P={row.get('UP_precision')} R={row.get('UP_recall')}"
+                )
+                bs = row.get("best_short_signal_threshold")
+                if bs:
+                    print(
+                        f"    best SHORT signal: thr={bs['threshold']}  "
+                        f"precision={bs['short_precision']}  n={bs['short_signals']}"
+                    )
 
     print("\nInspect first: ml/reports/price_action/summary.json")
 
