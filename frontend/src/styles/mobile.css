@@ -1436,6 +1436,96 @@
   font-style: italic;
 }
 
+/* ── AI panel model toggle ─────────────────────────────────────────────────── */
+
+.mc-ai-mode-toggle {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.mc-ai-mode-btn {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 3px;
+  border: 1px solid var(--mc-border);
+  background: transparent;
+  color: var(--mc-dim);
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+
+.mc-ai-mode-btn-active {
+  color: #c9a0ff;
+  border-color: rgba(168, 120, 255, 0.50);
+  background: rgba(168, 120, 255, 0.10);
+}
+
+/* ── PA SHORT panel ────────────────────────────────────────────────────────── */
+
+.mc-pa-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mc-pa-subtitle {
+  font-size: 10px;
+  color: var(--mc-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.mc-pa-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.mc-pa-prob {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--mc-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.mc-pa-risk-chip {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.mc-pa-risk-none     { color: var(--mc-muted);  background: rgba(150,150,150,0.12); }
+.mc-pa-risk-watch    { color: #f5d26a;           background: rgba(245,210,106,0.12); }
+.mc-pa-risk-elevated { color: #f5a623;           background: rgba(245,166,35,0.15); }
+.mc-pa-risk-high     { color: var(--mc-red);     background: rgba(235,87,87,0.15); }
+
+.mc-pa-meta {
+  display: flex;
+  gap: 10px;
+  font-size: 10px;
+  color: var(--mc-dim);
+  flex-wrap: wrap;
+}
+
+.mc-pa-unavailable {
+  font-size: 11px;
+  color: var(--mc-muted);
+  padding: 1px 0 2px;
+}
+
+.mc-pa-disclaimer {
+  color: #f5a623;
+  font-style: normal;
+  font-weight: 500;
+}
+
 /* AI overlay chip (alongside SMA / EMA) */
 .mc-overlay-chip-ai {
   border-color: rgba(168, 120, 255, 0.50);

@@ -13,6 +13,9 @@ import type { WatchlistAsset } from '../utils/mobileWatchlist';
 import { computeAiSignal, mergeWithLive } from '../ml/aiSignal';
 import type { AiSignalResult } from '../ml/types';
 import { loadBcsOlderChunk } from '../api/bcsMarketData';
+import { computePaShortSignal, initPaModel, onPaModelReady } from '../ml/paShortSignal';
+import type { PaShortSignalResult } from '../ml/paShortSignal';
+import type { AiPanelMode } from '../components/mobile/AiSignalPanel';
 import '../styles/mobile.css';
 
 // ---------------------------------------------------------------------------
@@ -249,6 +252,10 @@ export function MobileChartPage() {
   const [showEma20,       setShowEma20]       = useState(() => initOverlayToggle('showEma20'));
   const [showAiSignalPanel, setShowAiSignalPanel] = useState(initAiPanelToggle);
   const [aiSignal,        setAiSignal]        = useState<AiSignalResult | null>(null);
+  const [paSignal,        setPaSignal]        = useState<PaShortSignalResult | null>(null);
+  const [aiPanelMode,     setAiPanelMode]     = useState<AiPanelMode>('pa_short');
+  // Incremented once when the PA model finishes loading, to re-trigger signal recompute.
+  const [paModelTick,     setPaModelTick]     = useState(0);
   const [settingsOpen,    setSettingsOpen]    = useState(false);
 
   // Provider settings
@@ -494,17 +501,29 @@ export function MobileChartPage() {
     };
   }, [liveEnabled, timeframe, source, datePreset, providerId]);
 
-  // ── AI signal recompute ───────────────────────────────────────────────────
+  // ── PA model init on mount ────────────────────────────────────────────────
+  // Load the CatBoost JSON model once. When ready, trigger a re-render so the
+  // signal recompute effect picks up the loaded model.
+
+  useEffect(() => {
+    onPaModelReady(() => setPaModelTick(t => t + 1));
+    void initPaModel();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── AI signal recompute (debounced 300 ms) ────────────────────────────────
 
   useEffect(() => {
     if (aiDebounceRef.current) clearTimeout(aiDebounceRef.current);
     aiDebounceRef.current = setTimeout(() => {
-      setAiSignal(computeAiSignal(mergeWithLive(fullCandles, liveCandle), timeframe));
+      const merged = mergeWithLive(fullCandles, liveCandle);
+      setAiSignal(computeAiSignal(merged, timeframe));
+      setPaSignal(computePaShortSignal(merged));
     }, 300);
     return () => {
       if (aiDebounceRef.current) clearTimeout(aiDebounceRef.current);
     };
-  }, [fullCandles, liveCandle, timeframe]);
+  }, [fullCandles, liveCandle, timeframe, paModelTick]);
 
   // ── Header search ─────────────────────────────────────────────────────────
 
@@ -888,7 +907,14 @@ export function MobileChartPage() {
             </div>
           ) : null}
 
-          {showAiSignalPanel ? <AiSignalPanel signal={aiSignal} /> : null}
+          {showAiSignalPanel ? (
+            <AiSignalPanel
+              mode={aiPanelMode}
+              onModeChange={setAiPanelMode}
+              mockSignal={aiSignal}
+              paSignal={paSignal}
+            />
+          ) : null}
         </>
       ) : null}
 

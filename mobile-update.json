@@ -1,13 +1,13 @@
 {
-  "versionCode": 10,
-  "versionName": "1.0.9",
-  "apkUrl": "https://github.com/Vitac86/Technical-Analyst/releases/download/v1.0.9/technical-analyst-v1.0.9.apk",
+  "versionCode": 11,
+  "versionName": "1.0.10",
+  "apkUrl": "https://github.com/Vitac86/Technical-Analyst/releases/download/v1.0.10/technical-analyst-v1.0.10.apk",
   "releaseDate": "2026-05-28",
   "notes": [
-    "Fixed BCS candle request parameters",
-    "Improved BCS 400 error handling",
-    "Added safe BCS range policy",
-    "Added lazy loading of older candles",
-    "Preserved chart position when prepending history"
+    "Added experimental local PA SHORT AI model (pa_short_v0)",
+    "Added local CatBoost JSON inference (no backend, no cloud)",
+    "Added 52-feature price-action feature calculation in app",
+    "Research model only — backtest not yet profitable",
+    "Clear research/backtest warning shown in panel"
   ]
 }
