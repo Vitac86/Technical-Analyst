@@ -1,12 +1,13 @@
 {
-  "versionCode": 8,
-  "versionName": "1.0.7",
-  "apkUrl": "https://github.com/Vitac86/Technical-Analyst/releases/download/v1.0.7/technical-analyst-v1.0.7.apk",
+  "versionCode": 9,
+  "versionName": "1.0.8",
+  "apkUrl": "https://github.com/Vitac86/Technical-Analyst/releases/download/v1.0.8/technical-analyst-v1.0.8.apk",
   "releaseDate": "2026-05-28",
   "notes": [
-    "Added data provider settings",
-    "Added experimental BCS market data provider",
-    "Added read-only BCS token configuration",
-    "Added MOEX fallback option"
+    "Fixed BCS authorization endpoint",
+    "Fixed BCS candle loading endpoint",
+    "Fixed BCS candle response parsing",
+    "Moved data provider settings into drawer",
+    "Added compact provider status on chart screen"
   ]
 }

@@ -241,7 +241,9 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
         <div className="mc-drawer-header">
           <div>
             <div className="mc-drawer-title">Assets</div>
-            <div className="mc-drawer-subtitle">Tap to load chart</div>
+            <div className="mc-drawer-subtitle">
+              Technical Analyst · v{CURRENT_APP_VERSION_NAME}
+            </div>
           </div>
           <div className="mc-drawer-header-btns">
             {editMode ? (
