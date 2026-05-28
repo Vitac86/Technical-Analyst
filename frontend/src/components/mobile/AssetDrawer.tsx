@@ -28,6 +28,7 @@ type Props = {
   selectedId: string;
   onSelect: (asset: WatchlistAsset) => void;
   onWatchlistChange: (list: WatchlistAsset[]) => void;
+  onSettingsOpen?: () => void;
 };
 
 function formatQuotePrice(price: number): string {
@@ -50,7 +51,7 @@ function quoteTone(changePercent: number): string {
   return 'flat';
 }
 
-export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, onWatchlistChange }: Props) {
+export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, onWatchlistChange, onSettingsOpen }: Props) {
   const [editMode,       setEditMode]       = useState(false);
   const [showSearch,     setShowSearch]     = useState(false);
   const [searchQuery,    setSearchQuery]    = useState('');
@@ -433,6 +434,19 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
             })
           )}
         </div>
+
+        {/* ── Settings section ────────────────────────────────────────── */}
+        {onSettingsOpen && (
+          <div className="mc-update-section" style={{ borderBottom: '1px solid var(--mc-border)', paddingBottom: 10 }}>
+            <button
+              type="button"
+              className="mc-update-check-btn"
+              onClick={() => { onClose(); onSettingsOpen(); }}
+            >
+              ⚙ Data source
+            </button>
+          </div>
+        )}
 
         {/* ── Update section ──────────────────────────────────────────── */}
         <div className="mc-update-section">

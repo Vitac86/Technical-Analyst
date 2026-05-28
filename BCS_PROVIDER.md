@@ -17,11 +17,12 @@ Experimental support for loading historical candles from BCS Broker API.
 
 ## Where to paste the token
 
-1. Open the app and tap the **⚙** (gear) button in the chart controls row.
-2. In **Data Provider** settings, select **BCS**.
-3. Paste your refresh token into the masked input field.
-4. Tap **Save token**.
-5. Optionally tap **Test** to verify connectivity.
+1. Open the app and tap the **☰** (hamburger) button to open the asset drawer.
+2. At the bottom of the drawer, tap **⚙ Data source**.
+3. In **Data Provider** settings, select **BCS**.
+4. Paste your refresh token into the masked input field.
+5. Tap **Save token**.
+6. Optionally tap **Test** to verify connectivity.
 
 ---
 
@@ -46,14 +47,72 @@ Because tokens are stored in session memory only (not localStorage, not IndexedD
 
 ---
 
+## Verified API endpoints
+
+**Base URL:** `https://be.broker.ru`
+
+### Authentication
+
+```
+POST /trade-api-keycloak/realms/tradeapi/protocol/openid-connect/token
+Content-Type: application/x-www-form-urlencoded
+Accept: application/json
+
+client_id=trade-api-write
+grant_type=refresh_token
+refresh_token=<token>
+```
+
+Successful response fields: `access_token`, `expires_in`, `refresh_expires_in`, `refresh_token`
+
+### Historical candles
+
+```
+GET /trade-api-market-data-connector/api/v1/candles-chart
+
+Query params:
+  ticker      — instrument ticker (e.g. SBER)
+  classCode   — board code (e.g. TQBR)
+  startDate   — ISO 8601 UTC (e.g. 2026-05-25T00:00:00.000Z)
+  endDate     — ISO 8601 UTC
+  timeFrame   — M1 | M5 | M15 | M30 | H1 | H4 | D | W | MN
+```
+
+Response shape:
+```json
+{
+  "ticker": "SBER",
+  "classCode": "TQBR",
+  "startDate": "...",
+  "endDate": "...",
+  "timeFrame": "M5",
+  "bars": [
+    { "time": "2026-05-28T12:40:00.000Z", "open": 322.58, "close": 322.62, "high": 322.62, "low": 322.5, "volume": 4096128.0 }
+  ]
+}
+```
+
+> **Note:** BCS returns `bars` newest-first. The app sorts ascending before rendering.
+
+### Instrument lookup
+
+```
+POST /trade-api-information-service/api/v1/instruments/by-tickers
+Content-Type: application/json
+
+{ "tickers": ["SBER"] }
+```
+
+---
+
 ## Limitations
 
 - BCS support is **experimental**.
 - No orders, no trading, no portfolio operations — the app is read-only for market data only.
+- No candle caching or background sync.
 - Live polling is **disabled** in BCS mode (candles are loaded on demand / manual refresh).
-- Watchlist quotes continue to use **MOEX** (BCS quote endpoint not yet mapped).
-- If BCS fails and **Fallback to MOEX** is enabled, the chart loads MOEX data and shows a yellow warning: `BCS unavailable, using MOEX`.
-- BCS candle field names and endpoint URLs are marked as `TODO: verify` in the source code and must be confirmed against the BCS API documentation before production use.
+- Watchlist quotes continue to use **MOEX** (BCS quote endpoint not mapped).
+- If BCS fails and **Fallback to MOEX** is enabled, the chart loads MOEX data and shows a compact warning.
 
 ---
 
@@ -67,20 +126,3 @@ When **Fallback to MOEX** is enabled (default):
 When fallback is disabled:
 - BCS failures show a readable error message.
 - Existing chart data (if any) is preserved — no black/blank screen.
-
----
-
-## BCS API verification checklist
-
-Before enabling BCS in a production build, verify the following from BCS API documentation:
-
-- [ ] Token endpoint URL (`BCS_TOKEN_URL` in `bcsAuth.ts`)
-- [ ] Auth request body shape: `grant_type`, `client_id`, other fields
-- [ ] Auth response field names: `access_token`, `expires_in`
-- [ ] Candle endpoint URL (`BCS_CANDLES_URL` in `bcsMarketData.ts`)
-- [ ] Candle query parameter names: `instrumentId`, `interval`, `from`, `to`, `count`
-- [ ] Candle interval values: `M5`, `M15`, `H1`, `D1` (or BCS-specific naming)
-- [ ] Candle response envelope: direct array or `{ data: [...] }` or other
-- [ ] Candle field names: `time`/`t`, `open`/`o`, `high`/`h`, `low`/`l`, `close`/`c`, `volume`/`v`
-- [ ] Timestamp format: ISO 8601 with timezone or epoch milliseconds
-- [ ] Rate limit: confirm 10 RPS for market data endpoint

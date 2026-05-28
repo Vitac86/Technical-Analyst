@@ -577,6 +577,7 @@ export function MobileChartPage() {
         selectedId={selectedId}
         onSelect={handleSelectFromDrawer}
         onWatchlistChange={handleWatchlistChange}
+        onSettingsOpen={() => { setDrawerOpen(false); setSettingsOpen(true); }}
       />
 
       {/* ── Header ──────────────────────────────────────────────────── */}
@@ -707,15 +708,6 @@ export function MobileChartPage() {
           title={showAiSignalPanel ? 'Hide AI Signal' : 'Show AI Signal'}
         >
           AI
-        </button>
-        <button
-          type="button"
-          className={`mc-overlay-chip mc-overlay-chip-gear${settingsOpen ? ' mc-overlay-chip-active' : ''}`}
-          onClick={() => setSettingsOpen(v => !v)}
-          title="Data provider settings"
-          aria-label="Data provider settings"
-        >
-          ⚙
         </button>
       </div>
 

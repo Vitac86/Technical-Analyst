@@ -11,7 +11,8 @@ export const bcsProvider: MarketDataProvider = {
   label: 'BCS',
 
   loadCandles({ source, timeframe, from, till }: CandleLoadParams): Promise<MoexCandle[]> {
-    return loadBcsCandles(source.ticker, timeframe, from, till);
+    const classCode = source.board || 'TQBR';
+    return loadBcsCandles(source.ticker, classCode, timeframe, from, till);
   },
 
   async loadRecentCandles(_source: MoexSource, _timeframe: string): Promise<MoexCandle[]> {

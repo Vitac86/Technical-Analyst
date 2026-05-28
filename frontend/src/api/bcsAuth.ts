@@ -2,25 +2,18 @@
 // Exchanges a user-provided refresh token for a short-lived access token.
 // Access token is cached in session memory only; never logged or persisted.
 
-import { storeAccessToken, getAccessToken, getRefreshToken } from '../security/tokenStorage';
+import { storeAccessToken, getAccessToken, getRefreshToken, storeRefreshToken } from '../security/tokenStorage';
 
-// ---------------------------------------------------------------------------
-// TODO: Verify all BCS endpoint values and request shape against BCS API docs
-// or your BCS Postman collection before enabling BCS in production.
-// ---------------------------------------------------------------------------
-
-// TODO: Confirm exact BCS OAuth token endpoint URL.
-const BCS_TOKEN_URL = 'https://api-gateway.bcs.ru/v1/oauth/token';
-
-// TODO: Confirm whether BCS requires a client_id for refresh-token grants.
-const BCS_CLIENT_ID = 'mobile_app';
+const BCS_BASE_URL = 'https://be.broker.ru';
+const BCS_TOKEN_URL =
+  `${BCS_BASE_URL}/trade-api-keycloak/realms/tradeapi/protocol/openid-connect/token`;
 
 // ---------------------------------------------------------------------------
 // Error types
 // ---------------------------------------------------------------------------
 
 export type BcsAuthError =
-  | 'invalid_token'   // 401/403 or missing access_token in response
+  | 'invalid_token'   // 400 invalid_grant, 401/403, or missing access_token
   | 'network_error'   // fetch threw
   | 'rate_limited'    // 429
   | 'unknown';
@@ -48,20 +41,34 @@ export async function getBcsAccessToken(): Promise<string> {
     );
   }
 
-  // TODO: Verify exact request body shape against BCS API documentation.
   let resp: Response;
   try {
     resp = await fetch(BCS_TOKEN_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json',
+      },
+      body: new URLSearchParams({
+        client_id: 'trade-api-write',
         grant_type: 'refresh_token',
         refresh_token: refreshToken,
-        client_id: BCS_CLIENT_ID,
       }),
     });
   } catch {
     throw new BcsAuthException('network_error', 'Network error connecting to BCS auth server.');
+  }
+
+  if (resp.status === 400) {
+    let errorCode = '';
+    try {
+      const errBody = await resp.json() as Record<string, unknown>;
+      errorCode = typeof errBody.error === 'string' ? errBody.error : '';
+    } catch { /* ignore parse error */ }
+    const message = errorCode === 'invalid_grant'
+      ? 'BCS refresh token is invalid or expired. Paste a new token.'
+      : `BCS auth failed: HTTP 400${errorCode ? ` (${errorCode})` : ''}.`;
+    throw new BcsAuthException('invalid_token', message);
   }
 
   if (resp.status === 401 || resp.status === 403) {
@@ -87,7 +94,6 @@ export async function getBcsAccessToken(): Promise<string> {
   }
 
   const obj = json as Record<string, unknown>;
-  // TODO: Confirm BCS response field names (access_token, expires_in).
   const accessToken = typeof obj.access_token === 'string' ? obj.access_token : null;
   const expiresIn   = typeof obj.expires_in   === 'number' ? obj.expires_in   : 86400;
 
@@ -97,6 +103,13 @@ export async function getBcsAccessToken(): Promise<string> {
 
   // Token is stored in memory only — not logged, not persisted.
   storeAccessToken(accessToken, expiresIn);
+
+  // If BCS returned a rotated refresh token, update session memory.
+  const newRefresh = typeof obj.refresh_token === 'string' ? obj.refresh_token : null;
+  if (newRefresh) {
+    storeRefreshToken(newRefresh);
+  }
+
   return accessToken;
 }
 

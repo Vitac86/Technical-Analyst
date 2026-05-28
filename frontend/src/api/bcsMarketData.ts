@@ -3,30 +3,19 @@
 // No candle caching or persistence — candles live in React state only.
 
 import type { MoexCandle } from './moexDirect';
-import { aggregateCandles } from './moexDirect';
-import { getBcsAccessToken, BcsAuthException } from './bcsAuth';
+import { getBcsAccessToken } from './bcsAuth';
 
-// ---------------------------------------------------------------------------
-// TODO: Verify all BCS endpoint values and request/response shapes against
-// BCS API documentation or your BCS Postman collection before use.
-// ---------------------------------------------------------------------------
+const BCS_CANDLES_URL =
+  'https://be.broker.ru/trade-api-market-data-connector/api/v1/candles-chart';
 
-// TODO: Confirm exact BCS candle endpoint URL.
-const BCS_CANDLES_URL = 'https://api-gateway.bcs.ru/v1/candles-chart';
-
-// TODO: Confirm BCS interval parameter values (M5 / M15 / H1 / D1 or other naming).
+// Timeframe names confirmed via BCS Postman collection.
 const BCS_INTERVAL_MAP: Record<string, string> = {
-  '5m':  'M5',  // TODO: verify
-  '15m': 'M15', // TODO: verify
-  '1h':  'H1',  // TODO: verify
-  '4h':  'H1',  // Fetch H1, aggregate to 4h client-side (BCS may not support H4)
-  '1d':  'D1',  // TODO: verify
+  '5m':  'M5',
+  '15m': 'M15',
+  '1h':  'H1',
+  '4h':  'H4',
+  '1d':  'D',
 };
-
-const AGGREGATE_4H_MINUTES = 240;
-const BCS_MAX_BARS = 1440;
-// Pace sequential chunk requests to stay within ~10 RPS market data limit.
-const BCS_REQUEST_DELAY_MS = 150;
 
 // ---------------------------------------------------------------------------
 // Error types
@@ -59,15 +48,13 @@ function readNum(raw: RawBcsCandle, keys: string[]): number | null {
   return null;
 }
 
-function rawTimeToMoscow(raw: RawBcsCandle): string | null {
-  // TODO: Confirm BCS timestamp field name and format.
-  // Try common field names: time, t, date, begin, timestamp.
+// BCS returns UTC timestamps; shift +3h to match MOEX's Moscow-time display convention.
+function isoToMoscowBegin(raw: RawBcsCandle): string | null {
   const val = raw.time ?? raw.t ?? raw.date ?? raw.begin ?? raw.timestamp;
   if (val == null) return null;
   try {
     const d = typeof val === 'number' ? new Date(val) : new Date(String(val));
     if (isNaN(d.getTime())) return null;
-    // Shift to Moscow time (UTC+3) to match MoexCandle "YYYY-MM-DD HH:MM:SS" convention.
     const msk = new Date(d.getTime() + 3 * 3600 * 1000);
     const p = (n: number) => String(n).padStart(2, '0');
     return (
@@ -79,15 +66,14 @@ function rawTimeToMoscow(raw: RawBcsCandle): string | null {
   }
 }
 
-function parseBcsCandleArray(data: unknown): MoexCandle[] {
-  if (!Array.isArray(data)) return [];
+function parseBcsBars(bars: unknown): MoexCandle[] {
+  if (!Array.isArray(bars)) return [];
   const result: MoexCandle[] = [];
-  for (const item of data) {
+  for (const item of bars) {
     if (typeof item !== 'object' || item === null) continue;
     const raw = item as RawBcsCandle;
-    const begin = rawTimeToMoscow(raw);
+    const begin = isoToMoscowBegin(raw);
     if (!begin) continue;
-    // TODO: Confirm OHLCV field names. Try long (open, high, low, close, volume) and short (o, h, l, c, v).
     const open  = readNum(raw, ['open',  'o']);
     const high  = readNum(raw, ['high',  'h']);
     const low   = readNum(raw, ['low',   'l']);
@@ -100,11 +86,12 @@ function parseBcsCandleArray(data: unknown): MoexCandle[] {
 }
 
 // ---------------------------------------------------------------------------
-// Single chunk fetch
+// Fetch
 // ---------------------------------------------------------------------------
 
-async function fetchBcsCandleChunk(
+async function fetchBcsCandles(
   ticker: string,
+  classCode: string,
   bcsInterval: string,
   fromIso: string,
   toIso: string,
@@ -117,13 +104,12 @@ async function fetchBcsCandleChunk(
     throw new BcsMarketDataException('auth_error', msg);
   }
 
-  // TODO: Confirm BCS query parameter names and value formats.
   const url = new URL(BCS_CANDLES_URL);
-  url.searchParams.set('instrumentId', ticker);             // TODO: verify param name
-  url.searchParams.set('interval',     bcsInterval);        // TODO: verify param name
-  url.searchParams.set('from',         fromIso);            // TODO: verify date format
-  url.searchParams.set('to',           toIso);              // TODO: verify param name
-  url.searchParams.set('count',        String(BCS_MAX_BARS)); // TODO: verify param name
+  url.searchParams.set('ticker',    ticker);
+  url.searchParams.set('classCode', classCode);
+  url.searchParams.set('startDate', fromIso);
+  url.searchParams.set('endDate',   toIso);
+  url.searchParams.set('timeFrame', bcsInterval);
 
   let resp: Response;
   try {
@@ -154,30 +140,21 @@ async function fetchBcsCandleChunk(
     throw new BcsMarketDataException('unknown', 'BCS candles response was not valid JSON.');
   }
 
-  // TODO: Confirm BCS response envelope. Try common patterns.
-  let candleData: unknown;
-  if (Array.isArray(json)) {
-    candleData = json;
-  } else if (typeof json === 'object' && json !== null) {
-    const obj = json as Record<string, unknown>;
-    candleData = obj.data ?? obj.candles ?? obj.result ?? obj.items ?? [];
-  } else {
-    candleData = [];
-  }
+  // BCS response shape: { ticker, classCode, startDate, endDate, timeFrame, bars: [...] }
+  const bars = (typeof json === 'object' && json !== null)
+    ? (json as Record<string, unknown>).bars
+    : null;
 
-  return parseBcsCandleArray(candleData);
+  return parseBcsBars(bars);
 }
 
 // ---------------------------------------------------------------------------
 // Public load function
 // ---------------------------------------------------------------------------
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(r => setTimeout(r, ms));
-}
-
 export async function loadBcsCandles(
   ticker: string,
+  classCode: string,
   timeframe: string,
   from: string,
   till: string,
@@ -187,46 +164,11 @@ export async function loadBcsCandles(
     throw new BcsMarketDataException('unknown', `Unsupported BCS timeframe: ${timeframe}`);
   }
 
-  const fromDate = new Date(from + 'T00:00:00Z');
-  const tillDate = new Date(till + 'T23:59:59Z');
+  const fromIso = new Date(from + 'T00:00:00Z').toISOString();
+  const tillIso = new Date(till + 'T23:59:59Z').toISOString();
 
-  const allCandles: MoexCandle[] = [];
-  const seen = new Set<string>();
-  let currentFrom = fromDate;
-
-  while (currentFrom <= tillDate) {
-    const chunk = await fetchBcsCandleChunk(
-      ticker,
-      bcsInterval,
-      currentFrom.toISOString(),
-      tillDate.toISOString(),
-    );
-
-    if (chunk.length === 0) break;
-
-    for (const c of chunk) {
-      if (!seen.has(c.begin)) {
-        seen.add(c.begin);
-        allCandles.push(c);
-      }
-    }
-
-    if (chunk.length < BCS_MAX_BARS) break;
-
-    // Advance 1 minute past the last returned candle to fetch the next chunk
-    const lastBegin = chunk[chunk.length - 1].begin;
-    currentFrom = new Date(lastBegin.replace(' ', 'T') + 'Z');
-    currentFrom.setTime(currentFrom.getTime() + 60_000);
-
-    await sleep(BCS_REQUEST_DELAY_MS);
-  }
-
-  allCandles.sort((a, b) => (a.begin < b.begin ? -1 : a.begin > b.begin ? 1 : 0));
-
-  // 4h: BCS provides H1; aggregate client-side, same logic as moexDirect
-  if (timeframe === '4h') {
-    return aggregateCandles(allCandles, AGGREGATE_4H_MINUTES);
-  }
-
-  return allCandles;
+  const candles = await fetchBcsCandles(ticker, classCode, bcsInterval, fromIso, tillIso);
+  // BCS returns bars newest-first; sort ascending for the chart.
+  candles.sort((a, b) => (a.begin < b.begin ? -1 : a.begin > b.begin ? 1 : 0));
+  return candles;
 }

@@ -1,9 +1,4 @@
-cd "C:\Projects\Technical-Analyst"
-
-New-Item -ItemType Directory -Force -Path ".\scripts" | Out-Null
-
-@'
-import os
+﻿import os
 import json
 import datetime as dt
 from typing import Any
@@ -11,26 +6,43 @@ from typing import Any
 import requests
 
 
-BASE_URL = os.getenv("BCS_BASE_URL", "https://trade-api.bcs.ru").rstrip("/")
+BASE_URL = os.getenv("BCS_BASE_URL", "https://be.broker.ru").rstrip("/")
 REFRESH_TOKEN = os.getenv("BCS_REFRESH_TOKEN", "").strip()
 TICKER = os.getenv("BCS_TEST_TICKER", "SBER").strip().upper()
+CLASS_CODE = os.getenv("BCS_TEST_CLASS_CODE", "TQBR").strip().upper()
 
-AUTH_PATH = "/trade-api-keycloak/realms/tradeapi/protocol/openid-connect/token"
-INSTRUMENTS_BY_TICKER_PATH = "/api/v1/instruments/by-tickers"
-CANDLES_PATH = "/api/v1/candles-chart"
+AUTH_URL = BASE_URL + "/trade-api-keycloak/realms/tradeapi/protocol/openid-connect/token"
+INSTRUMENTS_URL = BASE_URL + "/trade-api-information-service/api/v1/instruments/by-tickers"
+CANDLES_URL = BASE_URL + "/trade-api-market-data-connector/api/v1/candles-chart"
 
 
-def mask_token(token: str) -> str:
-    if len(token) <= 12:
+def mask(value: str) -> str:
+    if not value:
+        return "<empty>"
+    if len(value) <= 12:
         return "***"
-    return token[:4] + "..." + token[-4:]
+    return value[:4] + "..." + value[-4:]
 
 
 def safe_json(resp: requests.Response) -> Any:
     try:
         return resp.json()
     except Exception:
-        return resp.text[:2000]
+        return resp.text[:3000]
+
+
+def sanitize(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        clean = {}
+        for key, value in obj.items():
+            if "token" in key.lower():
+                clean[key] = "<hidden>"
+            else:
+                clean[key] = sanitize(value)
+        return clean
+    if isinstance(obj, list):
+        return [sanitize(x) for x in obj[:5]]
+    return obj
 
 
 def print_response(title: str, resp: requests.Response) -> None:
@@ -38,83 +50,57 @@ def print_response(title: str, resp: requests.Response) -> None:
     print("URL:", resp.url)
     print("HTTP:", resp.status_code)
     print("Content-Type:", resp.headers.get("content-type"))
-    body = safe_json(resp)
 
-    # Не печатаем токены, даже если они пришли.
-    if isinstance(body, dict):
-        sanitized = {}
-        for k, v in body.items():
-            lk = k.lower()
-            if "token" in lk:
-                sanitized[k] = "<hidden>"
-            else:
-                sanitized[k] = v
-        print(json.dumps(sanitized, ensure_ascii=False, indent=2)[:4000])
+    body = sanitize(safe_json(resp))
+    if isinstance(body, (dict, list)):
+        print(json.dumps(body, ensure_ascii=False, indent=2)[:5000])
     else:
-        print(str(body)[:4000])
+        print(str(body)[:5000])
 
 
 def get_access_token() -> str:
     if not REFRESH_TOKEN:
         raise RuntimeError(
             "BCS_REFRESH_TOKEN is empty. Set it first:\n"
-            '$env:BCS_REFRESH_TOKEN = "paste_your_refresh_token_here"'
+            '$env:BCS_REFRESH_TOKEN = "your_refresh_token"'
         )
 
-    print("Base URL:", BASE_URL)
-    print("Refresh token:", mask_token(REFRESH_TOKEN))
+    print("BASE_URL:", BASE_URL)
+    print("TICKER:", TICKER)
+    print("CLASS_CODE:", CLASS_CODE)
+    print("REFRESH_TOKEN:", mask(REFRESH_TOKEN))
 
-    url = BASE_URL + AUTH_PATH
-
-    # Keycloak/OAuth token endpoints обычно принимают form-urlencoded.
-    # Точный client_id в документации может отличаться, поэтому пробуем несколько безопасных вариантов.
-    attempts = [
-        ("client_id=tradeapi", {
+    resp = requests.post(
+        AUTH_URL,
+        data={
+            "client_id": "trade-api-write",
             "grant_type": "refresh_token",
             "refresh_token": REFRESH_TOKEN,
-            "client_id": "tradeapi",
-        }),
-        ("client_id=mobile_app", {
-            "grant_type": "refresh_token",
-            "refresh_token": REFRESH_TOKEN,
-            "client_id": "mobile_app",
-        }),
-        ("without client_id", {
-            "grant_type": "refresh_token",
-            "refresh_token": REFRESH_TOKEN,
-        }),
-    ]
+        },
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+        },
+        timeout=30,
+    )
 
-    last_error = None
+    print_response("AUTH RESPONSE", resp)
 
-    for label, form in attempts:
-        print(f"\nTrying auth: {label}")
-        try:
-            resp = requests.post(
-                url,
-                data=form,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=20,
-            )
-        except Exception as e:
-            last_error = e
-            print("Network error:", repr(e))
-            continue
+    if not resp.ok:
+        raise RuntimeError("Auth failed. See AUTH RESPONSE above.")
 
-        print_response("AUTH RESPONSE", resp)
+    data = resp.json()
+    access_token = data.get("access_token")
 
-        if resp.ok:
-            data = resp.json()
-            access_token = data.get("access_token")
-            if isinstance(access_token, str) and access_token:
-                print("\nAUTH OK")
-                print("Access token:", mask_token(access_token))
-                print("Expires in:", data.get("expires_in"))
-                return access_token
+    if not isinstance(access_token, str) or not access_token:
+        raise RuntimeError("Auth response does not contain access_token.")
 
-        last_error = f"Auth failed with HTTP {resp.status_code}"
+    print("\nAUTH OK")
+    print("ACCESS_TOKEN:", mask(access_token))
+    print("EXPIRES_IN:", data.get("expires_in"))
+    print("REFRESH_EXPIRES_IN:", data.get("refresh_expires_in"))
 
-    raise RuntimeError(f"Could not get access token. Last error: {last_error}")
+    return access_token
 
 
 def auth_headers(access_token: str) -> dict:
@@ -124,138 +110,74 @@ def auth_headers(access_token: str) -> dict:
     }
 
 
-def find_instrument(access_token: str) -> dict | None:
-    url = BASE_URL + INSTRUMENTS_BY_TICKER_PATH
+def test_instruments(access_token: str) -> None:
+    body = {"tickers": [TICKER]}
 
-    # Точная форма body может отличаться. Пробуем наиболее вероятные варианты.
-    bodies = [
-        {"tickers": [TICKER], "page": 0, "size": 10},
-        {"ticker": TICKER, "page": 0, "size": 10},
-        {"securities": [TICKER], "page": 0, "size": 10},
-    ]
+    print("\nTrying instruments request:")
+    print(json.dumps(body, ensure_ascii=False, indent=2))
 
-    for body in bodies:
-        print("\nTrying instruments body:")
-        print(json.dumps(body, ensure_ascii=False, indent=2))
+    resp = requests.post(
+        INSTRUMENTS_URL,
+        json=body,
+        headers={
+            **auth_headers(access_token),
+            "Content-Type": "application/json",
+        },
+        timeout=30,
+    )
 
-        resp = requests.post(url, json=body, headers=auth_headers(access_token), timeout=20)
-        print_response("INSTRUMENTS RESPONSE", resp)
+    print_response("INSTRUMENTS RESPONSE", resp)
 
-        if not resp.ok:
-            continue
-
+    if resp.ok:
         data = safe_json(resp)
-
-        # Пытаемся найти первый объект инструмента в разных возможных envelope-структурах.
-        candidates = []
-        if isinstance(data, list):
-            candidates = data
-        elif isinstance(data, dict):
-            for key in ("data", "items", "content", "instruments", "result"):
-                val = data.get(key)
-                if isinstance(val, list):
-                    candidates = val
-                    break
-
-        if candidates:
-            inst = candidates[0]
-            if isinstance(inst, dict):
-                print("\nINSTRUMENT FOUND:")
-                print(json.dumps(inst, ensure_ascii=False, indent=2)[:4000])
-                return inst
-
-    print("\nInstrument not found or request shape is different.")
-    return None
+        if isinstance(data, list) and data:
+            print("\nINSTRUMENTS OK")
+            print("First item keys:", list(data[0].keys()))
 
 
-def pick_instrument_id(inst: dict) -> str | None:
-    # Печатаем ключи, чтобы понять реальную структуру.
-    print("\nInstrument keys:", list(inst.keys()))
-
-    possible_keys = [
-        "instrumentId",
-        "instrument_id",
-        "id",
-        "securityId",
-        "securityCode",
-        "symbol",
-        "ticker",
-    ]
-
-    for key in possible_keys:
-        val = inst.get(key)
-        if isinstance(val, (str, int)) and str(val):
-            print(f"Using instrument id from field `{key}`:", val)
-            return str(val)
-
-    return None
-
-
-def test_candles(access_token: str, instrument_id: str) -> None:
-    url = BASE_URL + CANDLES_PATH
-
+def test_candles(access_token: str) -> None:
     end = dt.datetime.now(dt.timezone.utc)
     start = end - dt.timedelta(days=3)
 
-    start_s = start.isoformat(timespec="seconds").replace("+00:00", "Z")
-    end_s = end.isoformat(timespec="seconds").replace("+00:00", "Z")
+    params = {
+        "ticker": TICKER,
+        "classCode": CLASS_CODE,
+        "startDate": start.isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "endDate": end.isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "timeFrame": "M5",
+    }
 
-    # Точная форма params в документации может быть startDate/endDate/timeFrame.
-    # Проверяем эту форму первой.
-    params_variants = [
-        {
-            "instrumentId": instrument_id,
-            "timeFrame": "M5",
-            "startDate": start_s,
-            "endDate": end_s,
-        },
-        {
-            "instrumentId": instrument_id,
-            "interval": "M5",
-            "startDate": start_s,
-            "endDate": end_s,
-        },
-        {
-            "instrumentId": instrument_id,
-            "timeFrame": "M5",
-            "from": start_s,
-            "to": end_s,
-        },
-    ]
+    print("\nTrying candles request:")
+    print(json.dumps(params, ensure_ascii=False, indent=2))
 
-    for params in params_variants:
-        print("\nTrying candles params:")
-        print(json.dumps(params, ensure_ascii=False, indent=2))
+    resp = requests.get(
+        CANDLES_URL,
+        params=params,
+        headers=auth_headers(access_token),
+        timeout=30,
+    )
 
-        resp = requests.get(url, params=params, headers=auth_headers(access_token), timeout=30)
-        print_response("CANDLES RESPONSE", resp)
+    print_response("CANDLES RESPONSE", resp)
 
-        if resp.ok:
-            data = safe_json(resp)
-            print("\nCANDLES OK. Response type:", type(data).__name__)
-            return
+    if resp.ok:
+        data = safe_json(resp)
+        print("\nCANDLES OK")
+        print("Response type:", type(data).__name__)
 
-    print("\nCandles request did not succeed with tested parameter shapes.")
+        if isinstance(data, list):
+            print("Candles count:", len(data))
+            if data:
+                print("First candle:")
+                print(json.dumps(sanitize(data[0]), ensure_ascii=False, indent=2)[:2000])
+        elif isinstance(data, dict):
+            print("Response keys:", list(data.keys()))
 
 
 def main() -> None:
     access_token = get_access_token()
-
-    inst = find_instrument(access_token)
-    if not inst:
-        print("\nAUTH WORKS, but instrument search failed.")
-        print("Next step: verify body shape for /api/v1/instruments/by-tickers in BCS Postman/docs.")
-        return
-
-    instrument_id = pick_instrument_id(inst)
-    if not instrument_id:
-        print("\nAUTH + INSTRUMENT SEARCH WORK, but could not detect instrumentId field.")
-        print("Send me the printed instrument JSON without tokens; we will map the correct field.")
-        return
-
-    test_candles(access_token, instrument_id)
+    test_instruments(access_token)
+    test_candles(access_token)
 
 
 if __name__ == "__main__":
     main()
-'@ | Set-Content -Encoding UTF8 ".\scripts\test_bcs_api.py"
