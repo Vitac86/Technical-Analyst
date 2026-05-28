@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { MobilePriceChart } from '../components/mobile/MobilePriceChart';
-import { AssetDrawer }      from '../components/mobile/AssetDrawer';
-import { AiSignalPanel }    from '../components/mobile/AiSignalPanel';
-import { loadMoexCandles, loadMoexRecentCandles, searchMoex } from '../api/moexDirect';
+import { MobilePriceChart }   from '../components/mobile/MobilePriceChart';
+import { AssetDrawer }        from '../components/mobile/AssetDrawer';
+import { AiSignalPanel }      from '../components/mobile/AiSignalPanel';
+import { ProviderSettings }   from '../components/mobile/ProviderSettings';
+import { searchMoex }         from '../api/moexDirect';
 import type { MoexCandle, MoexSearchResult, MoexSource } from '../api/moexDirect';
+import { getProvider }        from '../data/providerRegistry';
+import type { MarketDataProviderId } from '../data/types';
 import { loadWatchlist, makeAssetId, saveWatchlist } from '../utils/mobileWatchlist';
 import type { WatchlistAsset } from '../utils/mobileWatchlist';
 import { computeAiSignal, mergeWithLive } from '../ml/aiSignal';
@@ -56,7 +59,21 @@ const MOEX_INTERVAL_LABEL: Record<Timeframe, string> = {
 };
 
 // ---------------------------------------------------------------------------
-// localStorage helpers (small UI preferences only — no candle data)
+// Provider status
+// ---------------------------------------------------------------------------
+
+type ProviderStatus = 'moex' | 'bcs' | 'bcs-fallback';
+
+function providerStatusLabel(status: ProviderStatus): string {
+  switch (status) {
+    case 'moex':         return 'Data: MOEX';
+    case 'bcs':          return 'Data: BCS';
+    case 'bcs-fallback': return 'Data: BCS→MOEX';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// localStorage helpers (small UI preferences only — no candle data, no tokens)
 // ---------------------------------------------------------------------------
 
 const LS_PREFIX = 'technicalAnalyst.mobile.';
@@ -112,10 +129,8 @@ function dayDiff(fromYmd: string, toYmd: string): number {
 
 function freshnessHint(tf: Timeframe, latestBegin?: string): string | null {
   if (!latestBegin) return null;
-
   const latestDate = latestBegin.slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(latestDate)) return null;
-
   const ageDays = dayDiff(latestDate, localYmd(new Date()));
   if (ageDays <= 0) return null;
   if (tf !== '1d') return ageDays === 1 ? 'Last candle: yesterday' : `Stale: ${latestDate}`;
@@ -174,6 +189,16 @@ function initAiPanelToggle(): boolean {
   return v === null || v === 'true'; // default ON
 }
 
+function initProviderId(): MarketDataProviderId {
+  const v = lsGet('provider');
+  return v === 'bcs' ? 'bcs' : 'moex';
+}
+
+function initFallbackEnabled(): boolean {
+  const v = lsGet('fallbackEnabled');
+  return v === null || v === 'true'; // default ON
+}
+
 // ---------------------------------------------------------------------------
 // Source display helper
 // ---------------------------------------------------------------------------
@@ -201,35 +226,41 @@ export function MobileChartPage() {
   const [loading,     setLoading]     = useState(false);
   const [error,       setError]       = useState<string | null>(null);
 
-  const [liveEnabled,    setLiveEnabled]    = useState(initLiveEnabled);
-  const [liveStatus,     setLiveStatus]     = useState<LiveStatus>('paused');
+  const [liveEnabled,     setLiveEnabled]     = useState(initLiveEnabled);
+  const [liveStatus,      setLiveStatus]      = useState<LiveStatus>('paused');
   const [lastRefreshTime, setLastRefreshTime] = useState<string | null>(null);
-  const [lastUpdateTime, setLastUpdateTime] = useState<string | null>(null);
+  const [lastUpdateTime,  setLastUpdateTime]  = useState<string | null>(null);
 
   const [searchQuery,   setSearchQuery]   = useState('');
   const [searchResults, setSearchResults] = useState<MoexSearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchOpen,    setSearchOpen]    = useState(false);
 
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [watchlist,  setWatchlist]  = useState<WatchlistAsset[]>(loadWatchlist);
+  const [drawerOpen,      setDrawerOpen]      = useState(false);
+  const [watchlist,       setWatchlist]       = useState<WatchlistAsset[]>(loadWatchlist);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(initDiagnosticsOpen);
-  const [showSma20, setShowSma20] = useState(() => initOverlayToggle('showSma20'));
-  const [showEma20, setShowEma20] = useState(() => initOverlayToggle('showEma20'));
+  const [showSma20,       setShowSma20]       = useState(() => initOverlayToggle('showSma20'));
+  const [showEma20,       setShowEma20]       = useState(() => initOverlayToggle('showEma20'));
   const [showAiSignalPanel, setShowAiSignalPanel] = useState(initAiPanelToggle);
-  const [aiSignal, setAiSignal] = useState<AiSignalResult | null>(null);
+  const [aiSignal,        setAiSignal]        = useState<AiSignalResult | null>(null);
+  const [settingsOpen,    setSettingsOpen]    = useState(false);
+
+  // Provider settings
+  const [providerId,       setProviderId]       = useState<MarketDataProviderId>(initProviderId);
+  const [fallbackEnabled,  setFallbackEnabled]  = useState(initFallbackEnabled);
+  const [providerStatus,   setProviderStatus]   = useState<ProviderStatus>('moex');
+  const [fallbackWarning,  setFallbackWarning]  = useState<string | null>(null);
 
   const debounceRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
   const aiDebounceRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchBoxRef    = useRef<HTMLDivElement | null>(null);
   const loadGenRef      = useRef(0);
   const liveInFlightRef = useRef(false);
-  // Mirrors fullCandles so the live-poll closure can read the current value
+  // Mirrors fullCandles so the live-poll closure can read current value
   // without making fullCandles a dependency of the live-polling effect.
   const fullCandlesRef  = useRef<MoexCandle[]>([]);
 
   // Opaque data key — changes when source/timeframe/preset changes.
-  // MobilePriceChart uses this to decide when to recreate the chart.
   const dataKey = `${source.engine}:${source.market}:${source.board}:${source.ticker}:${timeframe}:${datePreset}`;
 
   // ── Candle loading ────────────────────────────────────────────────────────
@@ -239,14 +270,17 @@ export function MobileChartPage() {
     tf: Timeframe,
     preset: DatePreset,
     options: { preserveData?: boolean } = {},
+    provId: MarketDataProviderId = providerId,
+    fbEnabled: boolean = fallbackEnabled,
   ) {
     loadGenRef.current += 1;
     const gen = loadGenRef.current;
     const preserveData = options.preserveData === true;
 
-    liveInFlightRef.current = false; // interrupt any in-flight live poll
+    liveInFlightRef.current = false;
     setLoading(true);
     setError(null);
+    setFallbackWarning(null);
     if (!preserveData) {
       setFullCandles([]);
       setLiveCandle(null);
@@ -254,9 +288,39 @@ export function MobileChartPage() {
       setLastUpdateTime(null);
     }
 
+    const params = { source: src, timeframe: tf, from: fromDate(preset), till: today() };
+
     try {
-      const data = await loadMoexCandles(src, tf, fromDate(preset), today());
-      if (gen !== loadGenRef.current) return;
+      let data: MoexCandle[];
+
+      if (provId === 'bcs') {
+        try {
+          data = await getProvider('bcs').loadCandles(params);
+          if (gen !== loadGenRef.current) return;
+          setProviderStatus('bcs');
+        } catch (bcsErr) {
+          if (gen !== loadGenRef.current) return;
+          if (fbEnabled) {
+            // Fall back to MOEX and show a compact warning
+            data = await getProvider('moex').loadCandles(params);
+            if (gen !== loadGenRef.current) return;
+            setProviderStatus('bcs-fallback');
+            const msg = bcsErr instanceof Error ? bcsErr.message : 'BCS unavailable';
+            setFallbackWarning(`BCS unavailable, using MOEX · ${msg}`);
+          } else {
+            // No fallback — keep existing chart data and surface error
+            const msg = bcsErr instanceof Error ? bcsErr.message : 'BCS load failed.';
+            setError(msg);
+            setLoading(false);
+            return;
+          }
+        }
+      } else {
+        data = await getProvider('moex').loadCandles(params);
+        if (gen !== loadGenRef.current) return;
+        setProviderStatus('moex');
+      }
+
       setFullCandles(data);
       setLiveCandle(null);
       setLastRefreshTime(formatHms(new Date()));
@@ -282,13 +346,16 @@ export function MobileChartPage() {
     lsSet('market', source.market);
     lsSet('board',  source.board);
   }, [source]);
-  useEffect(() => { lsSet('timeframe',  timeframe);  }, [timeframe]);
-  useEffect(() => { lsSet('datePreset', datePreset); }, [datePreset]);
-  useEffect(() => { lsSet('liveEnabled', liveEnabled ? 'true' : 'false'); }, [liveEnabled]);
-  useEffect(() => { lsSet('diagnosticsOpen', diagnosticsOpen ? 'true' : 'false'); }, [diagnosticsOpen]);
-  useEffect(() => { lsSet('showSma20', showSma20 ? 'true' : 'false'); }, [showSma20]);
-  useEffect(() => { lsSet('showEma20', showEma20 ? 'true' : 'false'); }, [showEma20]);
+  useEffect(() => { lsSet('timeframe',        timeframe);  }, [timeframe]);
+  useEffect(() => { lsSet('datePreset',        datePreset); }, [datePreset]);
+  useEffect(() => { lsSet('liveEnabled',       liveEnabled       ? 'true' : 'false'); }, [liveEnabled]);
+  useEffect(() => { lsSet('diagnosticsOpen',   diagnosticsOpen   ? 'true' : 'false'); }, [diagnosticsOpen]);
+  useEffect(() => { lsSet('showSma20',         showSma20         ? 'true' : 'false'); }, [showSma20]);
+  useEffect(() => { lsSet('showEma20',         showEma20         ? 'true' : 'false'); }, [showEma20]);
   useEffect(() => { lsSet('showAiSignalPanel', showAiSignalPanel ? 'true' : 'false'); }, [showAiSignalPanel]);
+  // Non-sensitive provider setting is fine for localStorage
+  useEffect(() => { lsSet('provider',       providerId);                              }, [providerId]);
+  useEffect(() => { lsSet('fallbackEnabled', fallbackEnabled ? 'true' : 'false');     }, [fallbackEnabled]);
 
   // Keep fullCandlesRef current so the live-poll closure can check without
   // adding fullCandles to the live-effect deps (which would restart the interval).
@@ -296,12 +363,12 @@ export function MobileChartPage() {
 
   // ── Live polling ──────────────────────────────────────────────────────────
   // KEY RULE: do NOT call setFullCandles here.
-  // setFullCandles triggers the candles effect in MobilePriceChart which calls
-  // setData() + fitContent() — causing a chart blink and zoom reset every tick.
-  // Instead, only update liveCandle; MobilePriceChart handles it via series.update().
+  // BCS live is not yet reliable; when BCS is selected, live mode is paused.
+  // Only MOEX provider runs live polling.
 
   useEffect(() => {
-    if (!liveEnabled || timeframe === '1d') {
+    const liveDisabled = !liveEnabled || timeframe === '1d' || providerId === 'bcs';
+    if (liveDisabled) {
       setLiveStatus('paused');
       return;
     }
@@ -312,22 +379,18 @@ export function MobileChartPage() {
     async function pollOnce() {
       if (liveInFlightRef.current) return;
       if (document.visibilityState !== 'visible') return;
-      // Skip until the initial full load has completed.
       if (fullCandlesRef.current.length === 0) return;
 
       liveInFlightRef.current = true;
       try {
-        const recent = await loadMoexRecentCandles(source, timeframe, controller.signal);
+        const recent = await getProvider('moex').loadRecentCandles(source, timeframe, controller.signal);
         if (cancelled) return;
         if (recent.length > 0) {
-          // Only update liveCandle — NOT fullCandles.
-          // MobilePriceChart.series.update() handles the visual refresh without
-          // blinking or resetting zoom/scroll.
           setLiveCandle(recent[recent.length - 1]);
           setLiveStatus('live');
           setLastUpdateTime(formatHms(new Date()));
         } else if (!cancelled) {
-          setLiveStatus('live'); // healthy poll, market just has no new data
+          setLiveStatus('live');
         }
       } catch {
         if (!cancelled && !controller.signal.aborted) setLiveStatus('error');
@@ -340,8 +403,6 @@ export function MobileChartPage() {
       if (document.visibilityState === 'visible') void pollOnce();
     }
 
-    // Fire once immediately (returns early if initial load not done yet),
-    // then on the per-timeframe interval.
     void pollOnce();
     const pollMs = POLL_INTERVAL_MS[timeframe] ?? 1000;
     const id = setInterval(() => { void pollOnce(); }, pollMs);
@@ -354,11 +415,10 @@ export function MobileChartPage() {
       clearInterval(id);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  }, [liveEnabled, timeframe, source, datePreset]);
+  }, [liveEnabled, timeframe, source, datePreset, providerId]);
 
   // ── AI signal recompute ───────────────────────────────────────────────────
-  // Debounced at 300 ms to avoid recomputing every live tick (1 s polling).
-  // Stores only the result in React state — no candles or features are persisted.
+
   useEffect(() => {
     if (aiDebounceRef.current) clearTimeout(aiDebounceRef.current);
     aiDebounceRef.current = setTimeout(() => {
@@ -399,12 +459,7 @@ export function MobileChartPage() {
   }
 
   function handleSelectResult(r: MoexSearchResult) {
-    const newSrc: MoexSource = {
-      ticker: r.ticker,
-      engine: r.engine,
-      market: r.market,
-      board:  r.board,
-    };
+    const newSrc: MoexSource = { ticker: r.ticker, engine: r.engine, market: r.market, board: r.board };
     setSource(newSrc);
     setSearchQuery('');
     setSearchOpen(false);
@@ -415,12 +470,7 @@ export function MobileChartPage() {
   // ── Drawer: asset selection ───────────────────────────────────────────────
 
   function handleSelectFromDrawer(asset: WatchlistAsset) {
-    const newSrc: MoexSource = {
-      ticker: asset.ticker,
-      engine: asset.engine,
-      market: asset.market,
-      board:  asset.board,
-    };
+    const newSrc: MoexSource = { ticker: asset.ticker, engine: asset.engine, market: asset.market, board: asset.board };
     setSource(newSrc);
     void loadCandles(newSrc, timeframe, datePreset);
   }
@@ -455,6 +505,17 @@ export function MobileChartPage() {
     void loadCandles(source, timeframe, datePreset);
   }
 
+  // ── Provider settings callbacks ───────────────────────────────────────────
+
+  function handleProviderChange(id: MarketDataProviderId) {
+    setProviderId(id);
+    void loadCandles(source, timeframe, datePreset, {}, id, fallbackEnabled);
+  }
+
+  function handleFallbackChange(enabled: boolean) {
+    setFallbackEnabled(enabled);
+  }
+
   // Close header search dropdown on outside tap
   useEffect(() => {
     function onPointerDown(e: PointerEvent) {
@@ -480,9 +541,12 @@ export function MobileChartPage() {
   const chartCandleCount =
     fullCandles.length + (liveCandle && lastFullCandle && liveCandle.begin > lastFullCandle.begin ? 1 : 0);
   const staleHint = freshnessHint(timeframe, latestChartCandle?.begin);
+
+  // When BCS is selected, live is always paused (not yet implemented)
+  const effectiveLiveEnabled = liveEnabled && providerId !== 'bcs';
   const liveStateText = loading
     ? 'SYNCING'
-    : timeframe === '1d' || !liveEnabled
+    : timeframe === '1d' || !effectiveLiveEnabled
       ? 'PAUSED'
       : liveStatus === 'error'
         ? 'LIVE ERROR'
@@ -494,6 +558,16 @@ export function MobileChartPage() {
 
   return (
     <div className="mc-page">
+
+      {/* ── Provider settings modal ──────────────────────────────────── */}
+      <ProviderSettings
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        providerId={providerId}
+        onProviderChange={handleProviderChange}
+        fallbackEnabled={fallbackEnabled}
+        onFallbackChange={handleFallbackChange}
+      />
 
       {/* ── Asset drawer ────────────────────────────────────────────── */}
       <AssetDrawer
@@ -577,7 +651,7 @@ export function MobileChartPage() {
           ))}
           <button
             type="button"
-            className={`mc-chip mc-chip-live${liveEnabled ? ' mc-chip-live-on' : ''}`}
+            className={`mc-chip mc-chip-live${effectiveLiveEnabled ? ' mc-chip-live-on' : ''}`}
             onClick={() => setLiveEnabled(v => !v)}
             title={liveEnabled ? 'Pause live updates' : 'Enable live updates'}
           >
@@ -608,7 +682,7 @@ export function MobileChartPage() {
         </div>
       </div>
 
-      {/* ── Chart / states ──────────────────────────────────────────── */}
+      {/* ── Chart overlays + settings gear ──────────────────────────── */}
       <div className="mc-chart-settings" role="group" aria-label="Chart overlays">
         <button
           type="button"
@@ -634,8 +708,18 @@ export function MobileChartPage() {
         >
           AI
         </button>
+        <button
+          type="button"
+          className={`mc-overlay-chip mc-overlay-chip-gear${settingsOpen ? ' mc-overlay-chip-active' : ''}`}
+          onClick={() => setSettingsOpen(v => !v)}
+          title="Data provider settings"
+          aria-label="Data provider settings"
+        >
+          ⚙
+        </button>
       </div>
 
+      {/* ── Chart / states ──────────────────────────────────────────── */}
       <div className="mc-chart-area">
         {hasData ? (
           <div className="mc-chart-stack">
@@ -649,6 +733,9 @@ export function MobileChartPage() {
             />
             {loading ? <div className="mc-chart-sync-pill">Syncing...</div> : null}
             {compactError ? <div className="mc-chart-error-pill">{compactError}</div> : null}
+            {fallbackWarning && !compactError ? (
+              <div className="mc-chart-fallback-pill">{fallbackWarning}</div>
+            ) : null}
           </div>
         ) : loading ? (
           <div className="mc-state mc-state-loading">
@@ -681,6 +768,9 @@ export function MobileChartPage() {
               <span className={`mc-footer-state mc-footer-state-${liveStateText.toLowerCase().replace(' ', '-')}`}>
                 {liveStateText}
               </span>
+              <span className={`mc-footer-provider mc-footer-provider-${providerStatus}`}>
+                {providerStatusLabel(providerStatus)}
+              </span>
               <button
                 type="button"
                 className={`mc-data-toggle${diagnosticsOpen ? ' mc-data-toggle-on' : ''}`}
@@ -694,12 +784,14 @@ export function MobileChartPage() {
               {lastUpdateTime ? <span>Live: {lastUpdateTime}</span> : null}
               {staleHint ? <span className="mc-footer-stale">{staleHint}</span> : null}
               {compactError ? <span className="mc-footer-error">Refresh failed</span> : null}
+              {fallbackWarning ? <span className="mc-footer-fallback">BCS→MOEX</span> : null}
             </div>
           </div>
 
           {diagnosticsOpen ? (
             <div className="mc-diagnostics">
               <span>{source.engine}/{source.market}/{source.board}/{source.ticker}</span>
+              <span>Provider: {providerId.toUpperCase()}</span>
               <span>MOEX: {MOEX_INTERVAL_LABEL[timeframe]}</span>
               <span>Count: {chartCandleCount}</span>
               <span>First: {firstCandle?.begin ?? '--'}</span>
@@ -707,6 +799,7 @@ export function MobileChartPage() {
               <span>Full: {lastRefreshTime ?? '--'}</span>
               <span>Live: {lastUpdateTime ?? '--'}</span>
               <span>Poll: {formatPollInterval(timeframe)}</span>
+              {fallbackWarning ? <span>Fallback: active</span> : null}
             </div>
           ) : null}
 
