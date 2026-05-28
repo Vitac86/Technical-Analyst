@@ -1,110 +1,277 @@
-# ML Training Scaffold — Technical Analyst
+# ML Training Pipeline — Technical Analyst
 
-Planned offline training pipeline for a CatBoost direction-probability model.
-This directory is for PC-side tooling only — nothing here is required for the APK build.
+Offline PC-side CatBoost training pipeline for a direction-prediction model
+targeting liquid MOEX shares on the TQBR board.
 
----
-
-## Planned pipeline
-
-### 1. Download historical MOEX candles (PC)
-
-Fetch raw candle data from MOEX ISS for target instruments and timeframes.
-Store locally as CSV or Parquet for feature engineering.
-
-### 2. Build features
-
-Use the same feature definitions as `frontend/src/ml/features.ts` to avoid
-train/serve skew. Port or mirror the TypeScript logic to Python:
-
-```
-return_1, return_3, return_5, return_10
-volatility_10, volatility_20
-candle_body_pct, candle_range_pct
-upper_wick_pct, lower_wick_pct
-volume_change_5, volume_zscore_20
-price_vs_sma_20, price_vs_ema_20
-sma_20_slope, ema_20_slope
-high_low_position_20
-```
-
-Feature order must match `AI_FEATURE_NAMES` in `frontend/src/ml/types.ts`.
-
-### 3. Create labels
-
-Label each candle with `UP / DOWN / FLAT` based on the close price
-`horizonCandles` (currently 3) candles ahead:
-
-- `UP`   if forward_return > +threshold
-- `DOWN` if forward_return < -threshold
-- `FLAT` otherwise
-
-Use a conservative threshold (e.g. 0.5–1× average volatility).
-Exclude the last `horizonCandles` rows per series (no future leakage).
-
-### 4. Train CatBoost MultiClass model
-
-```python
-from catboost import CatBoostClassifier
-
-model = CatBoostClassifier(
-    iterations=500,
-    learning_rate=0.05,
-    depth=6,
-    loss_function='MultiClass',
-    classes_count=3,       # DOWN=0, FLAT=1, UP=2
-    eval_metric='Accuracy',
-    random_seed=42,
-)
-model.fit(X_train, y_train, eval_set=(X_val, y_val), early_stopping_rounds=50)
-```
-
-### 5. Validate with walk-forward split
-
-Use expanding-window or rolling-window walk-forward to avoid look-ahead bias.
-Evaluate Accuracy, log-loss, and calibration of predicted probabilities.
-Reject model if no-trade rate exceeds 80% or accuracy < naive baseline.
-
-### 6. Export model artifact
-
-Export a small model for APK bundling (target < 2 MB):
-
-```python
-model.save_model('model_direction_v2.cbm')
-```
-
-Consider `model_shrink_rate` and feature selection to keep size small.
-Document the exact feature list and order in `model-manifest.json`.
-
-### 7. Integrate model artifact into APK
-
-1. Copy `model_direction_v2.cbm` to `frontend/public/models/`.
-2. Update `frontend/public/models/model-manifest.json` with new version and metadata.
-3. Add a real CatBoost WASM/JS runtime in `frontend/src/ml/mockModel.ts`
-   (replace the `runMockModel` function — keep the same `FeatureVector` input contract).
-4. Bump `modelVersion` to `"catboost_direction_v2"`.
-5. Rebuild APK.
+**This directory is for PC-side training only.**
+Nothing here is required for the Android APK build.
+No Python dependencies are added to the frontend.
 
 ---
 
-## File layout (future)
+## Instrument scope
+
+The model is trained on a configurable set of liquid MOEX shares (TQBR board):
+
+```
+SBER  GAZP  LKOH  ROSN  NVTK  GMKN  TATN  MOEX  AFLT  VTBR
+```
+
+**Important:** The model is trained on, and should primarily be applied to,
+liquid MOEX equity instruments on the TQBR board.
+It is **not valid** for FX pairs, futures, bonds, or illiquid instruments.
+
+---
+
+## Model overview
+
+| Parameter        | Value                          |
+|------------------|-------------------------------|
+| Type             | CatBoost MultiClass            |
+| Output classes   | DOWN (0) / FLAT (1) / UP (2)  |
+| Primary TF       | 5m (configurable to 15m)      |
+| Horizon          | 3 candles ahead                |
+| Up/Down threshold| ±0.25% forward return          |
+| Features         | 30 technical indicators        |
+| Training period  | 2022-01-01 → 2024-12-31        |
+
+---
+
+## File layout
 
 ```
 ml/
-  README.md          ← this file
-  data/              ← raw candle CSVs (gitignored)
-  notebooks/         ← exploration notebooks (gitignored)
-  train.py           ← training entry point
-  features.py        ← mirrors frontend/src/ml/features.ts
-  evaluate.py        ← walk-forward validation
-  models/            ← exported .cbm artifacts (gitignored until ready)
+  README.md                    ← this file
+  requirements.txt             ← PC-side Python dependencies
+  config/
+    default.yaml               ← tickers, timeframe, label settings, catboost params
+  moex_download.py             ← download raw 1m candles from MOEX ISS
+  features.py                  ← 30 technical features (no future leakage)
+  labels.py                    ← UP/DOWN/FLAT labels (close-based)
+  build_dataset.py             ← aggregate → features → labels → save parquet
+  train_catboost.py            ← time-split, train, evaluate, save .cbm
+  validate_walk_forward.py     ← expanding-window walk-forward validation
+  export_model_info.py         ← export manifest JSON for future APK integration
+
+  data/                        ← gitignored — created by download/build scripts
+    raw/                       ← raw 1m CSVs per ticker
+    processed/                 ← aggregated, featurised, labelled parquet
+  models/                      ← gitignored (*.cbm) — trained model binaries
+  reports/                     ← gitignored — metrics and validation reports
 ```
 
 ---
 
-## Notes
+## Setup
 
-- Do NOT add Python dependencies to `frontend/`.
-- Do NOT make the frontend build depend on Python.
-- Do NOT commit trained model binaries until size and accuracy are validated.
-- Keep feature names in sync between `features.py` and `frontend/src/ml/features.ts`.
+```bash
+# From repo root (C:\Projects\Technical-Analyst)
+cd C:\Projects\Technical-Analyst
+
+# Create and activate a virtual environment
+python -m venv .venv
+.venv\Scripts\activate          # Windows
+# source .venv/bin/activate     # macOS/Linux
+
+# Install dependencies
+pip install -r ml/requirements.txt
+```
+
+> The virtual environment `.venv/` is gitignored.
+> Do not add any of these dependencies to `frontend/package.json`.
+
+---
+
+## Step 1 — Download candles
+
+Downloads 1-minute candles for all configured tickers from MOEX ISS public API.
+Raw CSVs are saved to `ml/data/raw/`.
+
+```bash
+python ml/moex_download.py
+```
+
+Options:
+
+```bash
+# Re-download existing files
+python ml/moex_download.py --force
+
+# Download only specific tickers
+python ml/moex_download.py --tickers SBER GAZP LKOH
+```
+
+**Expected time:** ~10–30 minutes for all 10 tickers over 3 years of 1m data.
+The script is polite to MOEX servers (0.35s delay between paginated requests).
+
+**Output:** `ml/data/raw/<TICKER>_1m.csv`
+
+---
+
+## Step 2 — Build dataset
+
+Aggregates 1m raw candles to the target timeframe (default 5m), computes
+all 30 features, assigns labels, and saves a single Parquet file with
+metadata columns (ticker, timeframe, engine, market, board).
+
+```bash
+python ml/build_dataset.py
+```
+
+Options:
+
+```bash
+# Build for 15m instead of the config default
+python ml/build_dataset.py --timeframe 15m
+
+# Save as CSV instead of Parquet
+python ml/build_dataset.py --csv
+```
+
+**Output:** `ml/data/processed/dataset_5m.parquet`
+
+---
+
+## Step 3 — Train model
+
+Loads the processed dataset, applies a time-based split (no random shuffle),
+trains CatBoost MultiClass, and evaluates on the held-out validation and test sets.
+
+```bash
+python ml/train_catboost.py
+```
+
+Options:
+
+```bash
+python ml/train_catboost.py --timeframe 15m
+```
+
+**Outputs:**
+
+| File | Description |
+|------|-------------|
+| `ml/models/catboost_direction_v1.cbm` | Trained model binary (gitignored) |
+| `ml/models/catboost_direction_v1_manifest.json` | Model metadata |
+| `ml/reports/catboost_direction_v1_metrics.json` | Val/test accuracy and classification report |
+
+**Train/val/test split (time-based):**
+
+```
+oldest 70% → train
+next 15%   → validation (used for early stopping)
+latest 15% → test (held-out, reported separately)
+```
+
+---
+
+## Step 4 — Walk-forward validation
+
+Evaluates the model across time using an expanding training window.
+Each fold trains on all data before the validation window and reports
+accuracy, per-class metrics, and signal counts.
+
+```bash
+python ml/validate_walk_forward.py
+```
+
+Options:
+
+```bash
+python ml/validate_walk_forward.py --folds 6 --threshold 0.60
+```
+
+**Output:** `ml/reports/catboost_walk_forward_v1.json`
+
+---
+
+## Step 5 — Export model manifest
+
+Exports a JSON manifest with feature names, class names, thresholds,
+and training metadata. Used for future APK integration planning.
+
+```bash
+python ml/export_model_info.py
+```
+
+**Output:** `ml/models/catboost_direction_v1_manifest.json`
+
+---
+
+## Complete run sequence
+
+```bash
+cd C:\Projects\Technical-Analyst
+python -m venv .venv && .venv\Scripts\activate
+pip install -r ml/requirements.txt
+python ml/moex_download.py
+python ml/build_dataset.py
+python ml/train_catboost.py
+python ml/validate_walk_forward.py
+python ml/export_model_info.py
+```
+
+---
+
+## What is gitignored
+
+| Path | Reason |
+|------|--------|
+| `ml/data/` | Large raw and processed data files |
+| `ml/models/*.cbm` | Trained model binaries (up to 50+ MB) |
+| `ml/models/*.bin` | Any other binary model artifacts |
+| `ml/reports/` | Generated metrics and validation reports |
+| `.venv/` | Virtual environment |
+| `__pycache__/` | Python bytecode |
+
+**Committed (tracked by git):**
+- All `.py` scripts
+- `ml/config/default.yaml`
+- `ml/README.md`
+- `ml/requirements.txt`
+- `ml/models/*_manifest.json` (metadata only, no binary)
+
+---
+
+## Configuration
+
+Edit `ml/config/default.yaml` to change tickers, timeframe, label thresholds,
+date range, or CatBoost hyperparameters.
+
+```yaml
+tickers: [SBER, GAZP, ...]     # training universe
+timeframe: 5m                  # 5m or 15m
+date_from: "2022-01-01"
+date_to:   "2024-12-31"
+label:
+  horizon_candles: 3
+  up_threshold_pct: 0.25
+  down_threshold_pct: 0.25
+```
+
+---
+
+## Future APK integration (not this step)
+
+When the model is validated and ready for inference:
+
+1. Copy `catboost_direction_v1.cbm` → `frontend/public/models/`
+2. Update `frontend/public/models/model-manifest.json`
+3. Replace `runMockModel()` in `frontend/src/ml/mockModel.ts` with real CatBoost inference
+4. Bump `modelVersion` in the manifest
+5. Rebuild APK
+
+Feature order in training (`FEATURE_COLUMNS` in `features.py`) must match the
+frontend inference code. The current frontend scaffold uses 17 features
+(`AI_FEATURE_NAMES` in `frontend/src/ml/types.ts`); the training pipeline uses
+30 features including additional training-only indicators. Alignment between
+training and inference will need to be resolved at APK integration time.
+
+---
+
+## Disclaimer
+
+This model is experimental and for research purposes only.
+**It is not financial advice.**
+Past performance on historical data does not guarantee future results.
+The model has not been audited for production use.

@@ -38,3 +38,9 @@ pnpm-debug.log*
 .vscode/
 .DS_Store
 Thumbs.db
+
+# ML training artifacts — large local-only files, never commit
+ml/data/
+ml/models/*.cbm
+ml/models/*.bin
+ml/reports/

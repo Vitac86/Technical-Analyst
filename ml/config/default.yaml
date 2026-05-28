@@ -1,0 +1,62 @@
+# Training universe — liquid MOEX shares on TQBR board
+tickers:
+  - SBER
+  - GAZP
+  - LKOH
+  - ROSN
+  - NVTK
+  - GMKN
+  - TATN
+  - MOEX
+  - AFLT
+  - VTBR
+
+# MOEX ISS market parameters
+engine: stock
+market: shares
+board: TQBR
+
+# Primary training timeframe (5m or 15m)
+timeframe: 5m
+
+# Raw download uses 1-minute candles; build_dataset aggregates to target TF.
+# MOEX ISS interval codes: 1=1min, 10=10min, 60=1hour, 24=1day, 7=1week, 31=1month
+raw_download_interval: 1
+
+# Date range for training data
+date_from: "2022-01-01"
+date_to: "2024-12-31"
+
+# Output paths (relative to repo root)
+output:
+  raw_dir: ml/data/raw
+  processed_dir: ml/data/processed
+  models_dir: ml/models
+  reports_dir: ml/reports
+
+# Label creation settings
+label:
+  mode: close          # close | tp_sl (tp_sl not yet implemented)
+  horizon_candles: 3   # look N candles ahead for forward return
+  up_threshold_pct: 0.25
+  down_threshold_pct: 0.25
+  # fee_bps: 5         # optional transaction cost for TP/SL mode
+
+# Training / validation settings
+train:
+  train_frac: 0.70
+  val_frac: 0.15
+  test_frac: 0.15
+  catboost:
+    loss_function: MultiClass
+    iterations: 300
+    depth: 5
+    learning_rate: 0.05
+    eval_metric: MultiClass
+    random_seed: 42
+    verbose: 100
+
+# Walk-forward validation settings
+walk_forward:
+  n_folds: 5
+  signal_threshold: 0.55
