@@ -148,6 +148,10 @@ ml/
   evaluate_signals.py          ← signal threshold analysis at P(UP/DOWN) thresholds
   experiments.py               ← runs 5 labeling/config experiments and summarises
   export_model_info.py         ← export manifest JSON for future APK integration
+  fractal_features.py          ← confirmed fractal detection (no future leakage)
+  price_action.py              ← structure trend, BoS, ChoCh, sweeps, range features
+  backtest_fractals.py         ← rule-based fractal strategy backtest
+  experiments_price_action.py  ← CatBoost experiments with PA features
 
   data/                        ← gitignored
     raw/                       ← raw 1m CSVs per ticker
@@ -381,6 +385,144 @@ When ready:
 4. Align `FEATURE_COLUMNS` (30 features) with frontend `AI_FEATURE_NAMES` (17 features)
 5. Bump `modelVersion` in manifest
 6. Rebuild APK
+
+---
+
+---
+
+## Price action / fractal research (new)
+
+This research direction tests whether fractal-based structural features
+improve signal quality before any APK integration is considered.
+
+### Why confirmed fractals?
+
+A fractal high at bar *i* requires `right_span` future candles to close
+before it can be identified. It is therefore only **confirmed** at bar
+`i + right_span`. Using the fractal price at bar *i* itself would be
+future leakage.
+
+All usable columns (`last_fractal_high`, `bars_since_fractal_high`, …) are
+forward-filled from the confirmation bar. The raw `fractal_high_price`
+column (placed at bar *i*) is provided for diagnostics only and **must not**
+be used as a model feature or backtest signal.
+
+### Leakage check summary
+
+| Column | Safe? | Reason |
+|--------|-------|--------|
+| `fractal_high_price` | **NO — diagnostic only** | Requires right-side candles |
+| `confirmed_fractal_high_price` | Yes | Placed at `i + right_span` |
+| `last_fractal_high` | Yes | Forward-filled from confirmation bar |
+| `bars_since_fractal_high` | Yes | Counts from confirmation event |
+| `distance_to_last_fractal_high_pct` | Yes | Uses confirmed level |
+| All `price_action.py` columns | Yes | Derived from confirmed levels only |
+
+### Fractal definition
+
+Fractal high at bar *i* (`left_span=2`, `right_span=2`):
+```
+high[i] > high[i-1], high[i-2]   (left side)
+high[i] > high[i+1], high[i+2]   (right side — requires future bars)
+→ confirmed at bar i+2
+```
+
+Fractal low: same with `low` and `<` direction.
+
+### New files
+
+```
+ml/
+  fractal_features.py      ← confirmed fractal detection, no-leakage columns
+  price_action.py          ← structure trend, BoS, ChoCh, sweeps, range features
+  backtest_fractals.py     ← rule-based strategy backtest (4 strategies)
+  experiments_price_action.py  ← CatBoost experiments with PA features (3 experiments)
+```
+
+### Step 7 — Run fractal backtest
+
+```
+python ml\backtest_fractals.py
+```
+
+Options:
+```
+python ml\backtest_fractals.py --no-volume-filter
+python ml\backtest_fractals.py --tickers SBER GAZP LKOH
+python ml\backtest_fractals.py --tp 0.5 --sl 0.3 --horizon 16
+```
+
+Strategies backtested:
+
+| Strategy | Direction | Entry condition |
+|----------|-----------|-----------------|
+| `fractal_breakout_long`   | LONG  | BoS up + bullish/neutral structure + vol > 0 |
+| `fractal_breakdown_short` | SHORT | BoS down + bearish/neutral structure + vol > 0 |
+| `sweep_reversal_long`     | LONG  | Low sweeps fractal low, close recovers |
+| `sweep_reversal_short`    | SHORT | High sweeps fractal high, close falls back |
+
+Outputs:
+```
+ml/reports/fractals/fractal_backtest_summary.json
+ml/reports/fractals/fractal_breakout_long.json
+ml/reports/fractals/fractal_breakdown_short.json
+ml/reports/fractals/sweep_reversal_long.json
+ml/reports/fractals/sweep_reversal_short.json
+```
+
+### Step 8 — Run price action ML experiments
+
+```
+python ml\experiments_price_action.py
+```
+
+Run a subset:
+```
+python ml\experiments_price_action.py --experiments 1 2
+python ml\experiments_price_action.py --dry-run
+```
+
+Experiments:
+
+| ID | Name | Label | Horizon | Classifier |
+|----|------|-------|---------|------------|
+| 1 | `catboost_pa_close_h6_thr020_balanced` | close | 6 | multiclass |
+| 2 | `catboost_pa_tp_sl_h12_tp040_sl025_balanced` | tp_sl | 12 | multiclass |
+| 3 | `catboost_pa_short_focused_tp_sl_h12` | tp_sl | 12 | binary SHORT |
+
+Experiment 3 trains a binary classifier:
+- Class 1 = SHORT_SETUP (original DOWN label)
+- Class 0 = NOT_SHORT
+- Motivated by prior finding that SHORT signals are more promising than LONG.
+
+Outputs:
+```
+ml/reports/price_action/catboost_pa_close_h6_thr020_balanced.json
+ml/reports/price_action/catboost_pa_tp_sl_h12_tp040_sl025_balanced.json
+ml/reports/price_action/catboost_pa_short_focused_tp_sl_h12.json
+ml/reports/price_action/summary.json    ← cross-checks vs fractal backtest
+```
+
+### What to inspect first
+
+1. `ml/reports/fractals/fractal_backtest_summary.json`
+   — `promising_strategies` lists strategies with ≥200 trades across ≥3 tickers.
+   — Check `best_by_profit_factor` and `best_by_cumulative_net`.
+
+2. `ml/reports/price_action/summary.json`
+   — Cross-comparison of rule-based vs ML results.
+   — `top_price_action_features_by_importance` shows which PA features matter.
+
+3. `ml/reports/price_action/catboost_pa_short_focused_tp_sl_h12.json`
+   — `binary_report.SHORT_precision` and `SHORT_f1` are the key metrics.
+
+### Why this is research only
+
+- Signals need out-of-sample stability across tickers before use.
+- A strategy is considered promising only if `total_trades ≥ 200` and
+  trades span at least 3 different tickers.
+- Profit factor must be consistent across tickers, not driven by one outlier.
+- **No APK integration until these criteria are met.**
 
 ---
 
