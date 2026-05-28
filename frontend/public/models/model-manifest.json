@@ -1,0 +1,10 @@
+{
+  "modelVersion": "mock_direction_v1",
+  "modelType": "mock",
+  "target": "direction_next_candles",
+  "classes": ["DOWN", "FLAT", "UP"],
+  "horizonCandles": 3,
+  "minCandlesRequired": 50,
+  "createdAt": "2026-05-22",
+  "notes": "Placeholder mock model. Real CatBoost model will be added later."
+}

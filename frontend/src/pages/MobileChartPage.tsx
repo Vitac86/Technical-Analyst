@@ -2,10 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { MobilePriceChart } from '../components/mobile/MobilePriceChart';
 import { AssetDrawer }      from '../components/mobile/AssetDrawer';
+import { AiSignalPanel }    from '../components/mobile/AiSignalPanel';
 import { loadMoexCandles, loadMoexRecentCandles, searchMoex } from '../api/moexDirect';
 import type { MoexCandle, MoexSearchResult, MoexSource } from '../api/moexDirect';
 import { loadWatchlist, makeAssetId, saveWatchlist } from '../utils/mobileWatchlist';
 import type { WatchlistAsset } from '../utils/mobileWatchlist';
+import { computeAiSignal, mergeWithLive } from '../ml/aiSignal';
+import type { AiSignalResult } from '../ml/types';
 import '../styles/mobile.css';
 
 // ---------------------------------------------------------------------------
@@ -166,6 +169,11 @@ function initOverlayToggle(key: 'showSma20' | 'showEma20'): boolean {
   return lsGet(key) === 'true';
 }
 
+function initAiPanelToggle(): boolean {
+  const v = lsGet('showAiSignalPanel');
+  return v === null || v === 'true'; // default ON
+}
+
 // ---------------------------------------------------------------------------
 // Source display helper
 // ---------------------------------------------------------------------------
@@ -208,8 +216,11 @@ export function MobileChartPage() {
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(initDiagnosticsOpen);
   const [showSma20, setShowSma20] = useState(() => initOverlayToggle('showSma20'));
   const [showEma20, setShowEma20] = useState(() => initOverlayToggle('showEma20'));
+  const [showAiSignalPanel, setShowAiSignalPanel] = useState(initAiPanelToggle);
+  const [aiSignal, setAiSignal] = useState<AiSignalResult | null>(null);
 
   const debounceRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aiDebounceRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchBoxRef    = useRef<HTMLDivElement | null>(null);
   const loadGenRef      = useRef(0);
   const liveInFlightRef = useRef(false);
@@ -277,6 +288,7 @@ export function MobileChartPage() {
   useEffect(() => { lsSet('diagnosticsOpen', diagnosticsOpen ? 'true' : 'false'); }, [diagnosticsOpen]);
   useEffect(() => { lsSet('showSma20', showSma20 ? 'true' : 'false'); }, [showSma20]);
   useEffect(() => { lsSet('showEma20', showEma20 ? 'true' : 'false'); }, [showEma20]);
+  useEffect(() => { lsSet('showAiSignalPanel', showAiSignalPanel ? 'true' : 'false'); }, [showAiSignalPanel]);
 
   // Keep fullCandlesRef current so the live-poll closure can check without
   // adding fullCandles to the live-effect deps (which would restart the interval).
@@ -343,6 +355,19 @@ export function MobileChartPage() {
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [liveEnabled, timeframe, source, datePreset]);
+
+  // ── AI signal recompute ───────────────────────────────────────────────────
+  // Debounced at 300 ms to avoid recomputing every live tick (1 s polling).
+  // Stores only the result in React state — no candles or features are persisted.
+  useEffect(() => {
+    if (aiDebounceRef.current) clearTimeout(aiDebounceRef.current);
+    aiDebounceRef.current = setTimeout(() => {
+      setAiSignal(computeAiSignal(mergeWithLive(fullCandles, liveCandle), timeframe));
+    }, 300);
+    return () => {
+      if (aiDebounceRef.current) clearTimeout(aiDebounceRef.current);
+    };
+  }, [fullCandles, liveCandle, timeframe]);
 
   // ── Header search ─────────────────────────────────────────────────────────
 
@@ -601,6 +626,14 @@ export function MobileChartPage() {
         >
           EMA
         </button>
+        <button
+          type="button"
+          className={`mc-overlay-chip${showAiSignalPanel ? ' mc-overlay-chip-active mc-overlay-chip-ai' : ''}`}
+          onClick={() => setShowAiSignalPanel(v => !v)}
+          title={showAiSignalPanel ? 'Hide AI Signal' : 'Show AI Signal'}
+        >
+          AI
+        </button>
       </div>
 
       <div className="mc-chart-area">
@@ -676,6 +709,8 @@ export function MobileChartPage() {
               <span>Poll: {formatPollInterval(timeframe)}</span>
             </div>
           ) : null}
+
+          {showAiSignalPanel ? <AiSignalPanel signal={aiSignal} /> : null}
         </>
       ) : null}
 

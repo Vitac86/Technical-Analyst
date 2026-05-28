@@ -1336,3 +1336,114 @@
   word-break: break-word;
   line-height: 1.4;
 }
+
+/* ── AI Signal panel ──────────────────────────────────────────────────────── */
+
+.mc-ai-panel {
+  background: var(--mc-surface);
+  border-top: 1px solid var(--mc-border);
+  padding: 9px 14px 8px;
+  flex-shrink: 0;
+}
+
+.mc-ai-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 5px;
+}
+
+.mc-ai-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--mc-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.mc-ai-badge {
+  font-size: 9px;
+  font-weight: 700;
+  color: #f5a623;
+  background: rgba(245, 166, 35, 0.12);
+  border: 1px solid rgba(245, 166, 35, 0.3);
+  border-radius: 3px;
+  padding: 1px 5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.mc-ai-unavailable {
+  font-size: 11px;
+  color: var(--mc-muted);
+  padding: 1px 0 3px;
+}
+
+.mc-ai-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mc-ai-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.mc-ai-direction {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.mc-ai-dir-long    { color: var(--mc-green); }
+.mc-ai-dir-short   { color: var(--mc-red); }
+.mc-ai-dir-notrade { color: var(--mc-muted); }
+
+.mc-ai-confidence {
+  font-size: 11px;
+  color: var(--mc-dim);
+}
+
+.mc-ai-conf-high   { color: #a9d8ff; }
+.mc-ai-conf-medium { color: var(--mc-muted); }
+.mc-ai-conf-low    { color: var(--mc-dim); }
+
+.mc-ai-probs {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, monospace;
+}
+
+.mc-ai-prob-up   { color: var(--mc-green); }
+.mc-ai-prob-down { color: var(--mc-red); }
+.mc-ai-prob-flat { color: var(--mc-muted); }
+
+.mc-ai-meta {
+  display: flex;
+  gap: 12px;
+  font-size: 10px;
+  color: var(--mc-dim);
+}
+
+.mc-ai-disclaimer {
+  margin-top: 5px;
+  font-size: 10px;
+  color: var(--mc-dim);
+  font-style: italic;
+}
+
+/* AI overlay chip (alongside SMA / EMA) */
+.mc-overlay-chip-ai {
+  border-color: rgba(168, 120, 255, 0.50);
+  color: #c4a7ff;
+}
+
+@media (max-width: 400px) {
+  .mc-ai-panel {
+    padding: 8px 10px 7px;
+  }
+}
