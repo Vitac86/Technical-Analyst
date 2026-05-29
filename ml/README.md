@@ -175,6 +175,65 @@ pip install -r ml/requirements.txt
 
 ---
 
+## BCS instrument discovery
+
+Offline BCS instrument discovery lives under `ml/instruments/` and is not used
+by the Android build.
+
+Auth uses a BCS refresh token from the environment only:
+
+```
+$env:BCS_REFRESH_TOKEN = "your_read_only_refresh_token"
+$env:BCS_CLIENT_ID = "trade-api-read"   # optional, this is the default
+```
+
+Fetch instruments by official BCS information type:
+
+```
+python ml\instruments\bcs_instruments_by_type.py --type GOODS
+python ml\instruments\bcs_instruments_by_type.py --type FUTURES
+python ml\instruments\bcs_instruments_by_type.py --all-types
+```
+
+Endpoint path:
+
+```
+https://be.broker.ru/trade-api-information-service/api/v1/instruments/by-type
+```
+
+The script exposes `BCS_INSTRUMENTS_BY_TYPE_PATH` for quick adjustment if BCS
+renames the route. The current official docs use `size` as the page-size query
+parameter; the CLI still calls this option `--limit`.
+
+Outputs:
+
+```
+ml/data/instruments/bcs_GOODS.json
+ml/reports/instruments/bcs_GOODS_summary.json
+ml/reports/instruments/bcs_instruments_by_type_summary.json
+```
+
+Commodity discovery uses `type=GOODS` first and falls back to candidate tickers
+through the BCS `by-tickers` information endpoint only if the GOODS endpoint
+fails:
+
+```
+python ml\instruments\discover_bcs_commodities.py
+```
+
+Output:
+
+```
+ml/reports/instruments/bcs_commodities.json
+```
+
+Reports include normalized samples, class/board distributions, instrument type
+distribution, currency distribution, ambiguous instruments, and suggested MOEX
+match keys (`ticker`, `classCode`, `isin`). Full raw BCS items are omitted by
+default; pass `--include-raw` only for local diagnostics.
+
+---
+
 ## Step 1 — Download candles
 
 ```

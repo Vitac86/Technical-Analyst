@@ -1,0 +1,63 @@
+# Fallback-only candidates for BCS commodity discovery.
+# The primary source is the official BCS type=GOODS endpoint.
+
+tickers:
+  - GLDRUB_TOM
+  - GLDRUB_TOD
+  - SLVRUB_TOM
+  - SLVRUB_TOD
+  - PLTRUB_TOM
+  - PLTRUB_TOD
+  - PDARUB_TOM
+  - PDARUB_TOD
+  - XAUUSD
+  - XAGUSD
+  - XPTUSD
+  - XPDUSD
+  - GOLD
+  - GLD
+  - SILV
+  - SLV
+  - BRENT
+  - BR
+  - NG
+
+manualOverrides:
+  GLDRUB_TOM:
+    tags: [commodity, precious_metals, gold]
+  GLDRUB_TOD:
+    tags: [commodity, precious_metals, gold]
+  XAUUSD:
+    tags: [commodity, precious_metals, gold]
+  GOLD:
+    tags: [commodity, precious_metals, gold]
+  GLD:
+    tags: [commodity, precious_metals, gold]
+  SLVRUB_TOM:
+    tags: [commodity, precious_metals, silver]
+  SLVRUB_TOD:
+    tags: [commodity, precious_metals, silver]
+  XAGUSD:
+    tags: [commodity, precious_metals, silver]
+  SILV:
+    tags: [commodity, precious_metals, silver]
+  SLV:
+    tags: [commodity, precious_metals, silver]
+  PLTRUB_TOM:
+    tags: [commodity, precious_metals, platinum]
+  PLTRUB_TOD:
+    tags: [commodity, precious_metals, platinum]
+  XPTUSD:
+    tags: [commodity, precious_metals, platinum]
+  PDARUB_TOM:
+    tags: [commodity, precious_metals, palladium]
+  PDARUB_TOD:
+    tags: [commodity, precious_metals, palladium]
+  XPDUSD:
+    tags: [commodity, precious_metals, palladium]
+  BRENT:
+    tags: [commodity, oil]
+  BR:
+    tags: [commodity, oil]
+  NG:
+    tags: [commodity, gas]
