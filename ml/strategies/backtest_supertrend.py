@@ -34,6 +34,7 @@ import csv
 import itertools
 import json
 import math
+import re
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -62,6 +63,16 @@ PROMISING_MIN_AVG_NET_RETURN_PCT = 0.0
 PROMISING_MIN_CUM_NET_RETURN_PCT = 0.0
 PROMISING_MIN_ACTIVE_MONTHS = 6
 PROMISING_MAX_MONTHLY_CONCENTRATION = 0.6  # one month <= 60 % of total return
+
+# A setup must clear these floors before it is even considered as best_train.
+# Setups below these floors can still appear in the grid CSV for diagnostic use
+# but cannot become the primary candidate (see _select_best_train).
+MIN_TRAIN_TRADES_FOR_BEST = 20
+MIN_TEST_TRADES_FOR_BEST = 5
+MIN_TRAIN_ACTIVE_MONTHS_FOR_BEST = 2
+# Below this trade count, profit_factor=inf/999 is not meaningful and should
+# be discounted when ranking candidates.
+PF_RELIABILITY_MIN_TRADES = 10
 
 GRID_ATR_LENGTHS = [5, 7, 10, 14, 20, 30, 50]
 GRID_MULTIPLIERS = [1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
@@ -114,6 +125,53 @@ def load_candles(ticker: str, class_code: str, timeframe: str) -> CandleSet | No
     if df.empty:
         return None
     return CandleSet(ticker=ticker, class_code=class_code, timeframe=timeframe, df=df)
+
+
+_TIMEFRAME_TOKEN_RE = re.compile(r"(?<![A-Z0-9])(M5|M15|M30|H1|H4|D1|D)(?![A-Z0-9])", re.IGNORECASE)
+
+
+def infer_timeframe_from_filename(path: Path) -> str:
+    stem = path.stem.upper()
+    matches = _TIMEFRAME_TOKEN_RE.findall(stem)
+    if not matches:
+        return "UNKNOWN"
+    # Last match wins so prefixes like CONTINUOUS_M15 resolve to M15 rather
+    # than to any earlier accidental token.
+    tf = matches[-1].upper()
+    return "D" if tf == "D1" else tf
+
+
+def load_candles_from_path(
+    path: Path,
+    *,
+    ticker: str | None = None,
+    class_code: str | None = None,
+    timeframe: str | None = None,
+) -> CandleSet | None:
+    """Load a generic OHLC CSV. Required columns: timestamp/open/high/low/close.
+
+    Extra columns (volume, source_ticker, etc.) are accepted and ignored.
+    """
+    if not path.exists():
+        return None
+    raw = pd.read_csv(path)
+    required = ("timestamp", "open", "high", "low", "close")
+    missing = [c for c in required if c not in raw.columns]
+    if missing:
+        raise ValueError(
+            f"CSV {path} is missing required columns: {missing}. "
+            f"Expected at minimum: {required}."
+        )
+    df = _coerce_timestamp(raw)
+    if df.empty:
+        return None
+    tf = timeframe or infer_timeframe_from_filename(path)
+    return CandleSet(
+        ticker=ticker or path.stem.upper(),
+        class_code=class_code or "CSV",
+        timeframe=tf,
+        df=df,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -447,16 +505,55 @@ def overfit_penalty(metrics: dict, atr_length: int, multiplier: float) -> float:
 
 
 def composite_score(metrics: dict, atr_length: int, multiplier: float) -> float:
-    pf = metrics["profit_factor"]
-    pf_capped = min(pf, 10.0)
+    pf = metrics.get("profit_factor", 0.0)
+    total_trades = int(metrics.get("total_trades", 0))
+    # When trade count is too small to make profit_factor meaningful, ignore
+    # the PF contribution to the score entirely. Otherwise cap to keep the
+    # scale comparable across setups.
+    if total_trades < PF_RELIABILITY_MIN_TRADES or pf >= 999.0:
+        pf_contribution = 0.0
+    else:
+        pf_contribution = (min(pf, 10.0) - 1.0) * 10.0
+
     score = (
-        metrics["average_net_return_pct"] * 100.0
-        + (pf_capped - 1.0) * 10.0
-        + metrics["win_rate"] * 2.0
-        - abs(metrics["max_drawdown_pct"]) * 0.05
+        metrics.get("average_net_return_pct", 0.0) * 100.0
+        + pf_contribution
+        + metrics.get("win_rate", 0.0) * 2.0
+        - abs(metrics.get("max_drawdown_pct", 0.0)) * 0.05
         - overfit_penalty(metrics, atr_length, multiplier)
+        - _low_sample_penalty(metrics)
     )
     return float(score)
+
+
+def _low_sample_penalty(metrics: dict) -> float:
+    """Penalise setups with too few trades, no OOS trades, narrow time spread,
+    or extreme month concentration."""
+    penalty = 0.0
+    total_trades = int(metrics.get("total_trades", 0))
+    if total_trades < MIN_TRAIN_TRADES_FOR_BEST:
+        # Big hit — keep these out of the top of the ranking.
+        penalty += (MIN_TRAIN_TRADES_FOR_BEST - total_trades) * 5.0
+    if total_trades == 0:
+        penalty += 50.0
+    active_months = int(metrics.get("active_months", 0))
+    if active_months < MIN_TRAIN_ACTIVE_MONTHS_FOR_BEST:
+        penalty += (MIN_TRAIN_ACTIVE_MONTHS_FOR_BEST - active_months) * 10.0
+    if metrics.get("monthly_concentration", 0.0) > PROMISING_MAX_MONTHLY_CONCENTRATION:
+        penalty += (metrics["monthly_concentration"] - PROMISING_MAX_MONTHLY_CONCENTRATION) * 30.0
+    return float(penalty)
+
+
+def is_eligible_for_best_train(train_metrics: dict, test_metrics: dict) -> bool:
+    """Return True when a setup has enough train + OOS trades to be a credible
+    primary candidate, not just a grid diagnostic."""
+    if int(train_metrics.get("total_trades", 0)) < MIN_TRAIN_TRADES_FOR_BEST:
+        return False
+    if int(test_metrics.get("total_trades", 0)) < MIN_TEST_TRADES_FOR_BEST:
+        return False
+    if int(train_metrics.get("active_months", 0)) < MIN_TRAIN_ACTIVE_MONTHS_FOR_BEST:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -733,27 +830,22 @@ def write_json(path: Path, payload: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-def run_for_ticker(
-    ticker: str,
-    class_code: str,
-    timeframes: list[str],
-    modes: list[str],
-    *,
-    output_prefix: str | None = None,
-) -> dict:
-    candle_sets: list[CandleSet] = []
-    for tf in timeframes:
-        cs = load_candles(ticker, class_code, tf)
-        if cs is None:
-            print(f"[backtest] no data for {ticker}/{class_code}/{tf} — skipping")
-            continue
-        # Sanity-check SuperTrend math on the full series with default params.
+def _sanity_check_candle_sets(candle_sets: list[CandleSet]) -> None:
+    for cs in candle_sets:
         sample = add_supertrend_signals(cs.df, atr_length=10, multiplier=3.0)
         issues = sanity_check(sample, atr_length=10)
         if issues:
-            print(f"  sanity issues on {ticker}/{class_code}/{tf}: {issues}")
-        candle_sets.append(cs)
+            print(f"  sanity issues on {cs.ticker}/{cs.class_code}/{cs.timeframe}: {issues}")
 
+
+def _run_for_candle_sets(
+    candle_sets: list[CandleSet],
+    *,
+    ticker: str,
+    class_code: str,
+    modes: list[str],
+    output_prefix: str,
+) -> dict:
     if not candle_sets:
         return {"error": "no_data", "ticker": ticker, "class_code": class_code}
 
@@ -761,18 +853,32 @@ def run_for_ticker(
     rows = run_grid(candle_sets, modes)
     print(f"[backtest] grid produced {len(rows)} setups")
 
-    best_train = max(rows, key=lambda r: r.score_train) if rows else None
+    eligible_rows = [
+        r for r in rows if is_eligible_for_best_train(r.train_metrics, r.test_metrics)
+    ]
+    best_train = max(eligible_rows, key=lambda r: r.score_train) if eligible_rows else None
+    best_train_diagnostic = max(rows, key=lambda r: r.score_train) if rows else None
     best_test = max(rows, key=lambda r: r.score_test) if rows else None
 
     # Promising-on-OOS gating using best-train setup's OOS metrics.
     selected: dict | None = None
     rejection_reasons: list[str] = []
+    low_trade_note: str | None = None
     if best_train is not None:
         ok, reasons = evaluate_promising(best_train.test_metrics)
         if ok:
             selected = _row_to_dict(best_train)
         else:
             rejection_reasons = reasons
+    elif rows:
+        low_trade_note = (
+            "No setup had enough trades for meaningful optimization."
+        )
+        rejection_reasons = [
+            f"no_setup_with_train_trades>={MIN_TRAIN_TRADES_FOR_BEST}",
+            f"or_test_trades>={MIN_TEST_TRADES_FOR_BEST}",
+            f"or_active_months>={MIN_TRAIN_ACTIVE_MONTHS_FOR_BEST}",
+        ]
 
     walk_forward_payload: dict = {}
     if best_train is not None:
@@ -805,11 +911,18 @@ def run_for_ticker(
         "timeframes_tested": [cs.timeframe for cs in candle_sets],
         "modes_tested": modes,
         "grid_size": len(rows),
+        "eligible_grid_size": len(eligible_rows),
         "best_train": _row_to_dict(best_train) if best_train else None,
+        "best_train_diagnostic_only": (
+            _row_to_dict(best_train_diagnostic)
+            if best_train_diagnostic and best_train is None
+            else None
+        ),
         "best_test_diagnostic_only": _row_to_dict(best_test) if best_test else None,
         "selected_candidate": selected,
         "promising": selected is not None,
         "rejection_reasons": rejection_reasons,
+        "low_trade_note": low_trade_note,
         "recommended_default_when_not_robust": {
             "mode": "long_only",
             "atr_length": 10,
@@ -833,6 +946,12 @@ def run_for_ticker(
             "min_active_months": PROMISING_MIN_ACTIVE_MONTHS,
             "max_monthly_concentration": PROMISING_MAX_MONTHLY_CONCENTRATION,
             "max_drawdown_floor_pct": -50.0,
+        },
+        "best_train_eligibility_floors": {
+            "min_train_trades": MIN_TRAIN_TRADES_FOR_BEST,
+            "min_test_trades": MIN_TEST_TRADES_FOR_BEST,
+            "min_train_active_months": MIN_TRAIN_ACTIVE_MONTHS_FOR_BEST,
+            "pf_reliability_min_trades": PF_RELIABILITY_MIN_TRADES,
         },
     }
 
@@ -866,6 +985,59 @@ def run_for_ticker(
     return summary
 
 
+def run_for_ticker(
+    ticker: str,
+    class_code: str,
+    timeframes: list[str],
+    modes: list[str],
+    *,
+    output_prefix: str | None = None,
+) -> dict:
+    candle_sets: list[CandleSet] = []
+    for tf in timeframes:
+        cs = load_candles(ticker, class_code, tf)
+        if cs is None:
+            print(f"[backtest] no data for {ticker}/{class_code}/{tf} — skipping")
+            continue
+        candle_sets.append(cs)
+    _sanity_check_candle_sets(candle_sets)
+    return _run_for_candle_sets(
+        candle_sets,
+        ticker=ticker,
+        class_code=class_code,
+        modes=modes,
+        output_prefix=output_prefix or f"supertrend_{ticker.lower()}",
+    )
+
+
+def run_for_csv_path(
+    csv_path: Path,
+    modes: list[str],
+    *,
+    output_prefix: str,
+) -> dict:
+    try:
+        cs = load_candles_from_path(csv_path)
+    except ValueError as exc:
+        print(f"[backtest] cannot load CSV {csv_path}: {exc}", file=sys.stderr)
+        return {"error": "bad_csv", "csv_path": str(csv_path)}
+    if cs is None:
+        print(f"[backtest] CSV not found or empty: {csv_path}", file=sys.stderr)
+        return {"error": "no_data", "csv_path": str(csv_path)}
+    print(
+        f"[backtest] csv-path mode: {csv_path.name} rows={len(cs.df)} "
+        f"timeframe={cs.timeframe}"
+    )
+    _sanity_check_candle_sets([cs])
+    return _run_for_candle_sets(
+        [cs],
+        ticker=cs.ticker,
+        class_code=cs.class_code,
+        modes=modes,
+        output_prefix=output_prefix,
+    )
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -882,25 +1054,64 @@ def build_argparser() -> argparse.ArgumentParser:
                    help="Backtest modes (default: all three).")
     p.add_argument("--all", action="store_true",
                    help="Convenience flag — run all timeframes + modes (current default).")
+    p.add_argument(
+        "--csv-path",
+        default=None,
+        help=(
+            "Optional path to an OHLC CSV (e.g. a continuous futures series). "
+            "If provided, --ticker/--class-code/--timeframes are ignored and the "
+            "grid runs against this file only."
+        ),
+    )
+    p.add_argument(
+        "--output-prefix",
+        default=None,
+        help="Report filename prefix. Required when --csv-path is used.",
+    )
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_argparser().parse_args(argv)
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    summary = run_for_ticker(
-        ticker=args.ticker.upper(),
-        class_code=args.class_code.upper(),
-        timeframes=args.timeframes,
-        modes=args.modes,
-    )
-    if summary.get("error") == "no_data":
-        print("Run download_bcs_goods_history.py first to populate ml/data/raw_bcs/", file=sys.stderr)
-        return 4
-    if summary.get("promising"):
-        print(f"[backtest] PROMISING candidate selected for {args.ticker}/{args.class_code}")
+
+    if args.csv_path:
+        if not args.output_prefix:
+            print(
+                "--output-prefix is required when --csv-path is provided.",
+                file=sys.stderr,
+            )
+            return 2
+        summary = run_for_csv_path(
+            Path(args.csv_path),
+            modes=args.modes,
+            output_prefix=args.output_prefix,
+        )
+        if summary.get("error") in ("no_data", "bad_csv"):
+            return 4
+        label = Path(args.csv_path).name
     else:
-        print(f"[backtest] No promising candidate. Reasons: {summary.get('rejection_reasons')}")
+        summary = run_for_ticker(
+            ticker=args.ticker.upper(),
+            class_code=args.class_code.upper(),
+            timeframes=args.timeframes,
+            modes=args.modes,
+            output_prefix=args.output_prefix,
+        )
+        if summary.get("error") == "no_data":
+            print("Run download_bcs_goods_history.py first to populate ml/data/raw_bcs/", file=sys.stderr)
+            return 4
+        label = f"{args.ticker}/{args.class_code}"
+
+    if summary.get("promising"):
+        print(f"[backtest] PROMISING candidate selected for {label}")
+    else:
+        reasons = summary.get("rejection_reasons")
+        note = summary.get("low_trade_note")
+        if note:
+            print(f"[backtest] No promising candidate for {label}: {note}")
+        else:
+            print(f"[backtest] No promising candidate for {label}. Reasons: {reasons}")
     return 0
 
 

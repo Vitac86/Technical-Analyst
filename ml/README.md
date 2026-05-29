@@ -782,15 +782,25 @@ app alongside the Mock and PA SHORT signals.
 
 ```
 download_bcs_goods_history.py   →  ml/data/raw_bcs/<TICKER>_<CC>_<TF>.csv
-              │                         (gitignored — local only)
+download_bcs_contract_history.py     (gitignored — local only)
+              │
+              ▼
+discover_gold_futures.py        gold futures candidates discovery
+scan_gold_futures_availability  candle-availability probe per candidate
+build_continuous_gold_futures   stitch contracts → continuous CSV
+              │
               ▼
 supertrend.py                   ATR, final bands, direction flips, diagnostics
               │
               ▼
 backtest_supertrend.py          grid search + train/test split + walk-forward
+   --ticker / --class-code            (per-instrument BCS run)
+   --csv-path / --output-prefix       (any OHLC CSV; e.g. continuous gold)
               │
               ▼
 ml/reports/strategies/          summary, grid CSV, best setup, walk-forward
+                                gold_futures_discovery / availability /
+                                gold_futures_continuous_summary
 ```
 
 ### Commands (offline research only)
@@ -804,6 +814,47 @@ python ml\strategies\download_bcs_goods_history.py \
 python ml\strategies\backtest_supertrend.py \
     --ticker GOLD --class-code FEG --all
 ```
+
+### Gold futures continuous-series research
+
+BCS `GOLD/FEG` returned 0 candles in earlier probes. The futures side has
+data, so the pipeline below discovers gold futures contracts, downloads
+each one, stitches them into a continuous series, and backtests SuperTrend
+on the stitched CSV. Discovery, availability, and continuous-summary
+reports land in `ml/reports/strategies/` (gitignored).
+
+```bash
+# A. Discover gold futures candidates on BCS (FUTURES + GOODS fallback).
+python ml\strategies\discover_gold_futures.py
+
+# B. Probe candle availability for each candidate (no raw CSV saved).
+python ml\strategies\scan_gold_futures_availability.py
+
+# C. Download per-contract OHLC for the candidates that have data.
+python ml\strategies\download_bcs_contract_history.py \
+    --ticker <TICKER> --class-code <CLASSCODE> \
+    --timeframes M5 M15 H1 --from-date 2024-01-01
+
+# D. Stitch downloaded contracts into a continuous series.
+#    Produces ml/data/processed_bcs/GOLD_FUT_CONTINUOUS_<TF>.csv (gitignored).
+python ml\strategies\build_continuous_gold_futures.py --timeframes M5 M15 H1
+
+# E. Backtest SuperTrend directly on the continuous CSV.
+python ml\strategies\backtest_supertrend.py \
+    --csv-path ml\data\processed_bcs\GOLD_FUT_CONTINUOUS_M15.csv \
+    --output-prefix supertrend_gold_fut_continuous_m15
+```
+
+`build_continuous_gold_futures.py` writes an **unadjusted** concatenation;
+the summary JSON includes the explicit warning
+`"This is an unadjusted continuous futures series. Roll gaps may affect
+indicators and backtest results."` Treat backtests on it as exploratory
+until a back-adjusted variant is added.
+
+`download_bcs_contract_history.py` is a generalisation of
+`download_bcs_goods_history.py`. It accepts any `--ticker` + `--class-code`
+combination, retries on 429/network errors, and supports `--skip-existing`
+/ `--overwrite-empty` for safe re-runs across many futures contracts.
 
 Both scripts require `BCS_REFRESH_TOKEN` in the environment.
 `BCS_CLIENT_ID` defaults to `trade-api-read`. Tokens are never logged
@@ -827,6 +878,32 @@ out-of-sample test slice:
 If no setup passes the gate, the summary lists `rejection_reasons` and
 the report falls back to a conservative `recommended_default` for use
 only as a research placeholder.
+
+### Best-train eligibility floors
+
+A separate floor is applied *before* the gate above, to stop the optimiser
+from choosing a setup with one or two lucky trades (which can produce
+`profit_factor = 999` and dominate the ranking). A grid row is eligible to
+become the primary `best_train` only when **all** of these hold:
+
+| Criterion | Threshold |
+|-----------|-----------|
+| Train trades | ≥ 20 |
+| Test trades | ≥ 5 |
+| Train active months | ≥ 2 |
+
+When no row clears these floors:
+
+* `best_train` is `null`
+* `selected_candidate` is `null`
+* `best_train_diagnostic_only` carries the highest-scored grid row purely
+  for inspection
+* `low_trade_note` is set to
+  *"No setup had enough trades for meaningful optimization."*
+
+The composite score also discounts setups with fewer than 10 trades
+(profit factor is unreliable below that), zero OOS trades, < 2 active
+months, or > 60 % single-month return concentration.
 
 ### App integration policy
 
