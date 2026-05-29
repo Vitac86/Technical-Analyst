@@ -2,47 +2,76 @@ import type { AiSignalResult } from '../../ml/types';
 import type { PaShortSignalResult } from '../../ml/paShortSignal';
 import { useTranslation } from '../../i18n/useTranslation';
 
-export type AiPanelMode = 'mock' | 'pa_short';
+// Unified signal mode used across the app. SuperTrend is a research mode and
+// is intentionally shown as "not validated" until the offline backtest
+// pipeline produces a selected candidate (see ml/strategies/).
+export type SignalMode = 'mock' | 'pa_short' | 'supertrend';
+
+// Legacy alias kept to ease the refactor.
+export type AiPanelMode = SignalMode;
 
 interface AiSignalPanelProps {
-  mode: AiPanelMode;
-  onModeChange: (mode: AiPanelMode) => void;
+  mode: SignalMode;
+  onModeChange: (mode: SignalMode) => void;
   mockSignal: AiSignalResult | null;
   paSignal: PaShortSignalResult | null;
 }
 
+const SIGNAL_MODES: SignalMode[] = ['mock', 'pa_short', 'supertrend'];
+
 export function AiSignalPanel({ mode, onModeChange, mockSignal, paSignal }: AiSignalPanelProps) {
   const { t } = useTranslation();
+
+  const headerTitle =
+    mode === 'pa_short'    ? t('ai.experimental') :
+    mode === 'supertrend'  ? t('ai.supertrend.title') :
+                             t('ai.signal');
+
   return (
     <div className="mc-ai-panel">
-      {/* Header row with model toggle */}
       <div className="mc-ai-header">
-        <span className="mc-ai-title">
-          {mode === 'pa_short' ? t('ai.experimental') : t('ai.signal')}
-        </span>
-        <div className="mc-ai-mode-toggle" role="group" aria-label="AI model selector">
-          <button
-            type="button"
-            className={`mc-ai-mode-btn${mode === 'mock' ? ' mc-ai-mode-btn-active' : ''}`}
-            onClick={() => onModeChange('mock')}
-          >
-            {t('settings.ai.mode.mock')}
-          </button>
-          <button
-            type="button"
-            className={`mc-ai-mode-btn${mode === 'pa_short' ? ' mc-ai-mode-btn-active' : ''}`}
-            onClick={() => onModeChange('pa_short')}
-          >
-            PA SHORT
-          </button>
-        </div>
+        <span className="mc-ai-title">{headerTitle}</span>
+        <SignalModeSelector mode={mode} onChange={onModeChange} />
       </div>
 
-      {mode === 'pa_short' ? (
-        <PaShortPanel signal={paSignal} />
-      ) : (
-        <MockPanel signal={mockSignal} />
-      )}
+      {mode === 'pa_short'   ? <PaShortPanel signal={paSignal} /> :
+       mode === 'supertrend' ? <SupertrendPanel /> :
+                               <MockPanel signal={mockSignal} />}
+    </div>
+  );
+}
+
+// ── Signal mode selector (segmented control) ──────────────────────────────────
+
+function SignalModeSelector({
+  mode,
+  onChange,
+}: {
+  mode: SignalMode;
+  onChange: (mode: SignalMode) => void;
+}) {
+  const { t } = useTranslation();
+  const labels: Record<SignalMode, string> = {
+    mock:       t('settings.ai.mode.mock'),
+    pa_short:   t('settings.ai.mode.pa_short'),
+    supertrend: t('settings.ai.mode.supertrend'),
+  };
+  return (
+    <div
+      className="mc-ai-mode-toggle"
+      role="group"
+      aria-label={t('settings.ai.mode')}
+    >
+      {SIGNAL_MODES.map((m) => (
+        <button
+          key={m}
+          type="button"
+          className={`mc-ai-mode-btn${mode === m ? ' mc-ai-mode-btn-active' : ''}`}
+          onClick={() => onChange(m)}
+        >
+          {labels[m]}
+        </button>
+      ))}
     </div>
   );
 }
@@ -138,10 +167,8 @@ function PaShortPanel({ signal }: { signal: PaShortSignalResult | null }) {
   return (
     <>
       <div className="mc-pa-body">
-        {/* Subtitle */}
         <div className="mc-pa-subtitle">{t('ai.short.risk')}</div>
 
-        {/* Probability + risk chip */}
         <div className="mc-pa-row">
           <span className="mc-pa-prob">{t('ai.short.risk')}: {probPct}</span>
           <span className={`mc-pa-risk-chip ${chipClass}`}>
@@ -149,7 +176,6 @@ function PaShortPanel({ signal }: { signal: PaShortSignalResult | null }) {
           </span>
         </div>
 
-        {/* Meta */}
         <div className="mc-pa-meta">
           <span>{t('ai.model')}: {signal.modelId}</span>
           <span>{t('ai.horizon')}: 12 {t('ai.candles')}</span>
@@ -157,9 +183,37 @@ function PaShortPanel({ signal }: { signal: PaShortSignalResult | null }) {
         </div>
       </div>
 
-      {/* Research warning — always visible */}
       <div className="mc-ai-disclaimer mc-pa-disclaimer">
         {t('ai.research.warning')}
+      </div>
+    </>
+  );
+}
+
+// ── SuperTrend sub-panel (research placeholder) ───────────────────────────────
+// This mode is intentionally not wired up to any in-app signal generator.
+// The rule-based SuperTrend candidate must clear the offline backtest gate
+// (see ml/strategies/) before the app surfaces it as a usable signal.
+
+function SupertrendPanel() {
+  const { t } = useTranslation();
+  return (
+    <>
+      <div className="mc-ai-body mc-st-body">
+        <div className="mc-ai-row">
+          <span className="mc-ai-direction mc-ai-dir-notrade">
+            {t('ai.supertrend.research')}
+          </span>
+          <span className="mc-pa-risk-chip mc-pa-risk-elevated">
+            {t('ai.supertrend.notValidated')}
+          </span>
+        </div>
+        <div className="mc-ai-meta">
+          <span>{t('ai.supertrend.runBacktest')}</span>
+        </div>
+      </div>
+      <div className="mc-ai-disclaimer mc-pa-disclaimer">
+        {t('ai.supertrend.disclaimer')}
       </div>
     </>
   );

@@ -1524,6 +1524,12 @@
   gap: 4px;
 }
 
+/* SuperTrend research placeholder. Subtle, no green/red so it doesn't look
+   like a confirmed trading signal. */
+.mc-st-body {
+  opacity: 0.92;
+}
+
 .mc-ai-row {
   display: flex;
   align-items: baseline;

@@ -770,6 +770,73 @@ is required.
 
 ---
 
+## SuperTrend (rule-based research signal)
+
+The `ml/strategies/` package contains an offline research pipeline for a
+classic rule-based SuperTrend indicator. **This is not a new ML model**:
+no training step, no learned weights. It is included so we can evaluate
+whether a deterministic SuperTrend rule would be worth surfacing in the
+app alongside the Mock and PA SHORT signals.
+
+### Pipeline
+
+```
+download_bcs_goods_history.py   →  ml/data/raw_bcs/<TICKER>_<CC>_<TF>.csv
+              │                         (gitignored — local only)
+              ▼
+supertrend.py                   ATR, final bands, direction flips, diagnostics
+              │
+              ▼
+backtest_supertrend.py          grid search + train/test split + walk-forward
+              │
+              ▼
+ml/reports/strategies/          summary, grid CSV, best setup, walk-forward
+```
+
+### Commands (offline research only)
+
+```bash
+# 1. Download GOLD / FEG historical candles from BCS (requires env vars).
+python ml\strategies\download_bcs_goods_history.py \
+    --ticker GOLD --class-code FEG --timeframes M5 M15 H1
+
+# 2. Run the SuperTrend backtest on every timeframe + mode combination.
+python ml\strategies\backtest_supertrend.py \
+    --ticker GOLD --class-code FEG --all
+```
+
+Both scripts require `BCS_REFRESH_TOKEN` in the environment.
+`BCS_CLIENT_ID` defaults to `trade-api-read`. Tokens are never logged
+or written to disk.
+
+### Acceptance gate
+
+A SuperTrend setup is marked as `promising` only when **all** hold on the
+out-of-sample test slice:
+
+| Criterion | Threshold |
+|-----------|-----------|
+| Total trades | ≥ 50 |
+| Profit factor | > 1.10 |
+| Average net return | > 0 % |
+| Cumulative net return | > 0 % |
+| Active months | ≥ 6 |
+| Single-month concentration | ≤ 60 % |
+| Max drawdown floor | > -50 % |
+
+If no setup passes the gate, the summary lists `rejection_reasons` and
+the report falls back to a conservative `recommended_default` for use
+only as a research placeholder.
+
+### App integration policy
+
+The app exposes SuperTrend as a **research mode** with a clear
+"not validated by backtest" disclaimer. The mode does not appear as a
+trading recommendation until a `selected_candidate` is present in the
+walk-forward report and is reconfirmed on fresh data.
+
+---
+
 ## Disclaimer
 
 Experimental research model only. Not financial advice.

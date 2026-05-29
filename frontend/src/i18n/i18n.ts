@@ -85,13 +85,15 @@ const STRINGS: Record<Lang, Dict> = {
     "settings.updates.failed": "Не удалось проверить обновление",
 
     // Settings — AI
-    "settings.ai.mode": "Режим панели ИИ",
-    "settings.ai.mode.mock": "Демо",
-    "settings.ai.mode.pa_short": "PA Short",
-    "settings.ai.warning": "Режим PA Short не показал устойчивой прибыльности в бэктесте. Используется только для исследований.",
+    "settings.ai.mode": "Режим сигнала",
+    "settings.ai.mode.mock": "Mock",
+    "settings.ai.mode.pa_short": "PA SHORT",
+    "settings.ai.mode.supertrend": "SuperTrend",
+    "settings.ai.warning": "Режимы PA SHORT и SuperTrend являются исследовательскими и не подтверждены бэктестом как прибыльные.",
     "settings.ai.descriptions": "Описание режимов",
     "settings.ai.desc.mock": "Статичная демо-аналитика. Инференс модели не выполняется. Безопасно для UI-разработки и демонстраций.",
     "settings.ai.desc.pa_short": "Локальная модель price action, работает полностью на устройстве. Формирует краткие сводки по свечным паттернам. Данные не покидают устройство.",
+    "settings.ai.desc.supertrend": "Исследовательский режим. Правило SuperTrend, не модель ИИ. Не подтверждено бэктестом. Сначала запустите офлайн-бэктест в ml/strategies/.",
     "settings.ai.note": "Анализ ИИ выполняется локально на устройстве. Данные не передаются внешним серверам.",
 
     // Settings — about
@@ -162,6 +164,11 @@ const STRINGS: Record<Lang, Dict> = {
     "ai.model": "Модель",
     "ai.candles": "свечей",
     "ai.disclaimer": "Экспериментальный локальный сигнал. Не является инвест. советом.",
+    "ai.supertrend.title": "SuperTrend (исследование)",
+    "ai.supertrend.research": "Исследовательский режим",
+    "ai.supertrend.notValidated": "Не подтверждено",
+    "ai.supertrend.runBacktest": "Сначала запустите офлайн-бэктест",
+    "ai.supertrend.disclaimer": "Правило SuperTrend. Только для исследований. Не подтверждено бэктестом.",
     "settings.data.token.client.label": "Клиент",
     "settings.data.token.client.auto": "auto",
     "settings.data.token.client.read": "trade-api-read",
@@ -246,13 +253,15 @@ const STRINGS: Record<Lang, Dict> = {
     "settings.updates.failed": "Update check failed",
 
     // Settings — AI
-    "settings.ai.mode": "AI Panel Mode",
+    "settings.ai.mode": "Signal mode",
     "settings.ai.mode.mock": "Mock",
-    "settings.ai.mode.pa_short": "PA Short",
-    "settings.ai.warning": "PA Short mode has not demonstrated consistent profitability in backtesting. It is provided for research purposes only.",
+    "settings.ai.mode.pa_short": "PA SHORT",
+    "settings.ai.mode.supertrend": "SuperTrend",
+    "settings.ai.warning": "PA SHORT and SuperTrend modes are research-only and have not been validated by backtest as profitable.",
     "settings.ai.descriptions": "Mode descriptions",
     "settings.ai.desc.mock": "Displays static placeholder analysis. No model inference is performed. Safe for UI development and demos.",
     "settings.ai.desc.pa_short": "Local price action model running entirely on-device. Generates short candlestick pattern summaries. No data leaves the device.",
+    "settings.ai.desc.supertrend": "Research mode. Rule-based SuperTrend, not an AI model. Not validated by backtest. Run the offline backtest in ml/strategies/ first.",
     "settings.ai.note": "AI analysis runs locally on your device. No data is sent to external servers.",
 
     // Settings — about
@@ -323,6 +332,11 @@ const STRINGS: Record<Lang, Dict> = {
     "ai.model": "Model",
     "ai.candles": "candles",
     "ai.disclaimer": "Experimental local signal. Not financial advice.",
+    "ai.supertrend.title": "SuperTrend (research)",
+    "ai.supertrend.research": "Research mode",
+    "ai.supertrend.notValidated": "Not validated",
+    "ai.supertrend.runBacktest": "Run offline backtest first",
+    "ai.supertrend.disclaimer": "Rule-based SuperTrend. Research only. Not validated by backtest.",
   },
 };
 

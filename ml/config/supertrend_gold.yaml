@@ -1,0 +1,83 @@
+# SuperTrend research configuration for BCS GOLD / FEG.
+#
+# This file describes the grid + backtest assumptions used by
+# ml/strategies/backtest_supertrend.py. It does NOT make trading
+# recommendations — it documents the parameter ranges, costs and
+# acceptance criteria used to evaluate the rule-based SuperTrend
+# strategy offline.
+
+ticker: GOLD
+classCode: FEG
+
+timeframes:
+  - M5
+  - M15
+  - H1
+# Optional larger timeframes — backtester will pick them up if data exists:
+optional_timeframes:
+  - H4
+  - D
+
+# Range used by the downloader when --from-date / --to-date are omitted.
+download_range:
+  from: "2024-01-01"
+  to:   "today"
+
+# Backtest cost + execution assumptions
+costs:
+  commission_bps: 5
+  slippage_bps: 5
+  # Conservative assumption when both TP and SL fall inside the same candle.
+  same_candle_priority: "sl_first"
+
+# Backtest variants
+modes:
+  - long_only
+  - short_only
+  - long_short_reversal
+# filtered_* variants add a minimum distance filter on top of the base mode.
+filters:
+  min_distance_pct_candidates: [0.25]
+
+# Parameter grid
+atr_lengths: [5, 7, 10, 14, 20, 30, 50]
+multipliers: [1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]
+
+# TP / SL / horizon overlays (null overlay means "exit on opposite signal")
+tp_sl_overlays:
+  - { tp_pct: null, sl_pct: null, horizon: null }
+  - { tp_pct: 0.4,  sl_pct: 0.25, horizon: 12   }
+  - { tp_pct: 0.8,  sl_pct: 0.4,  horizon: 24   }
+  - { tp_pct: 1.2,  sl_pct: 0.6,  horizon: 48   }
+
+# Train / test split
+train_ratio: 0.70
+walk_forward:
+  folds: 4
+  min_train_fraction: 0.40
+
+# Promising criteria — a setup must clear ALL of these on the out-of-sample
+# test slice to be marked "selected_candidate".
+promising_criteria:
+  min_trades: 50
+  min_profit_factor: 1.10
+  min_avg_net_return_pct: 0.0
+  min_cumulative_net_return_pct: 0.0
+  min_active_months: 6
+  max_monthly_concentration: 0.6
+  max_drawdown_floor_pct: -50.0
+
+# Conservative default — used only when no setup is promising.
+recommended_default_when_not_robust:
+  mode: long_only
+  atr_length: 10
+  multiplier: 3.0
+  tp_pct: null
+  sl_pct: null
+  horizon: null
+  note: "SuperTrend research candidate — NOT validated by backtest."
+
+notes:
+  - "SuperTrend is rule-based; this config does not train a model."
+  - "App must not advertise SuperTrend as profitable unless a promising candidate is selected."
+  - "Reports live under ml/reports/strategies/ and are gitignored."

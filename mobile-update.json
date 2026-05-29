@@ -1,13 +1,12 @@
 {
-  "versionCode": 24,
-  "versionName": "2.0.4",
-  "apkUrl": "https://github.com/Vitac86/Technical-Analyst/releases/download/v2.0.4/technical-analyst-v2.0.4.apk",
+  "versionCode": 25,
+  "versionName": "2.0.5",
+  "apkUrl": "https://github.com/Vitac86/Technical-Analyst/releases/download/v2.0.5/technical-analyst-v2.0.5.apk",
   "releaseDate": "2026-05-29",
   "notes": [
-    "Added BCS GOODS instruments to search",
-    "Added commodity instrument support for GOLD/BRENT/metals",
-    "Fixed scroll behavior in instrument search results",
-    "Improved search result source badges",
-    "Improved BCS instrument selection"
+    "Unified AI signal selector (Mock / PA SHORT / SuperTrend)",
+    "Added SuperTrend research mode placeholder (not validated by backtest)",
+    "Signal mode preference now persists between sessions",
+    "Refined research-mode disclaimers in RU and EN"
   ]
 }

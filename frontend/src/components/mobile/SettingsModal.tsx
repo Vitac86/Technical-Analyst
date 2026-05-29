@@ -32,8 +32,8 @@ export type SettingsModalProps = {
   liveStatus: "live" | "paused" | "stale" | "reconnecting" | "error";
   lastLiveUpdateAt: string | null;
   onReconnect: () => void;
-  aiPanelMode: "mock" | "pa_short";
-  onAiPanelModeChange: (mode: "mock" | "pa_short") => void;
+  aiPanelMode: "mock" | "pa_short" | "supertrend";
+  onAiPanelModeChange: (mode: "mock" | "pa_short" | "supertrend") => void;
 };
 
 type Tab = "data" | "live" | "updates" | "ai" | "about";
@@ -501,25 +501,26 @@ function AiTab({
   onAiPanelModeChange,
 }: Pick<SettingsModalProps, "aiPanelMode" | "onAiPanelModeChange">) {
   const { t } = useTranslation();
+  const modes: Array<{ id: SettingsModalProps["aiPanelMode"]; labelKey: string }> = [
+    { id: "mock",       labelKey: "settings.ai.mode.mock" },
+    { id: "pa_short",   labelKey: "settings.ai.mode.pa_short" },
+    { id: "supertrend", labelKey: "settings.ai.mode.supertrend" },
+  ];
   return (
     <div className="mc-sm-tab-content">
       <section className="mc-sm-card">
         <div className="mc-sm-card-label">{t("settings.ai.mode")}</div>
         <div className="mc-sm-segmented">
-          <button
-            type="button"
-            className={`mc-sm-seg-btn${aiPanelMode === "mock" ? " mc-sm-seg-btn-active" : ""}`}
-            onClick={() => onAiPanelModeChange("mock")}
-          >
-            {t("settings.ai.mode.mock")}
-          </button>
-          <button
-            type="button"
-            className={`mc-sm-seg-btn${aiPanelMode === "pa_short" ? " mc-sm-seg-btn-active" : ""}`}
-            onClick={() => onAiPanelModeChange("pa_short")}
-          >
-            {t("settings.ai.mode.pa_short")}
-          </button>
+          {modes.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              className={`mc-sm-seg-btn${aiPanelMode === m.id ? " mc-sm-seg-btn-active" : ""}`}
+              onClick={() => onAiPanelModeChange(m.id)}
+            >
+              {t(m.labelKey)}
+            </button>
+          ))}
         </div>
       </section>
 
@@ -537,6 +538,10 @@ function AiTab({
           <div className="mc-sm-ai-desc-item">
             <span className="mc-sm-ai-desc-name">{t("settings.ai.mode.pa_short")}</span>
             <span className="mc-sm-ai-desc-text">{t("settings.ai.desc.pa_short")}</span>
+          </div>
+          <div className="mc-sm-ai-desc-item">
+            <span className="mc-sm-ai-desc-name">{t("settings.ai.mode.supertrend")}</span>
+            <span className="mc-sm-ai-desc-text">{t("settings.ai.desc.supertrend")}</span>
           </div>
         </div>
       </section>

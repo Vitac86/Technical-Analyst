@@ -18,7 +18,7 @@ import type { AiSignalResult } from '../ml/types';
 import { loadBcsOlderChunk } from '../api/bcsMarketData';
 import { computePaShortSignal, initPaModel, onPaModelReady } from '../ml/paShortSignal';
 import type { PaShortSignalResult } from '../ml/paShortSignal';
-import type { AiPanelMode } from '../components/mobile/AiSignalPanel';
+import type { SignalMode } from '../components/mobile/AiSignalPanel';
 import { useTranslation } from '../i18n/useTranslation';
 import '../styles/mobile.css';
 
@@ -212,6 +212,19 @@ function initFallbackEnabled(): boolean {
   return v === null || v === 'true'; // default ON
 }
 
+// Signal mode preference. Stored under a top-level key (not under the mobile. prefix)
+// because it is a cross-cutting AI preference, not a chart UI knob.
+const SIGNAL_MODE_KEY = 'technicalAnalyst.signalMode';
+
+function initSignalMode(): SignalMode {
+  try {
+    const v = localStorage.getItem(SIGNAL_MODE_KEY);
+    if (v === 'mock' || v === 'pa_short' || v === 'supertrend') return v;
+  } catch { /* unavailable */ }
+  // Default: PA SHORT (existing model is bundled), otherwise Mock.
+  return 'pa_short';
+}
+
 // ---------------------------------------------------------------------------
 // Source display helper
 // ---------------------------------------------------------------------------
@@ -287,7 +300,7 @@ export function MobileChartPage() {
   const [showAiSignalPanel, setShowAiSignalPanel] = useState(initAiPanelToggle);
   const [aiSignal,        setAiSignal]        = useState<AiSignalResult | null>(null);
   const [paSignal,        setPaSignal]        = useState<PaShortSignalResult | null>(null);
-  const [aiPanelMode,     setAiPanelMode]     = useState<AiPanelMode>('pa_short');
+  const [aiPanelMode,     setAiPanelMode]     = useState<SignalMode>(initSignalMode);
   // Incremented once when the PA model finishes loading, to re-trigger signal recompute.
   const [paModelTick,     setPaModelTick]     = useState(0);
   const [settingsOpen,    setSettingsOpen]    = useState(false);
@@ -484,6 +497,11 @@ export function MobileChartPage() {
   // Non-sensitive provider setting is fine for localStorage
   useEffect(() => { lsSet('provider',       providerId);                              }, [providerId]);
   useEffect(() => { lsSet('fallbackEnabled', fallbackEnabled ? 'true' : 'false');     }, [fallbackEnabled]);
+
+  // Persist the signal-mode preference at a stable top-level key.
+  useEffect(() => {
+    try { localStorage.setItem(SIGNAL_MODE_KEY, aiPanelMode); } catch { /* unavailable */ }
+  }, [aiPanelMode]);
 
   // Keep fullCandlesRef current so the live-poll closure can check without
   // adding fullCandles to the live-effect deps (which would restart the interval).
