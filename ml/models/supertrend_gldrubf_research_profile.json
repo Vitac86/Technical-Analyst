@@ -1,0 +1,34 @@
+{
+  "profile_id": "supertrend_gldrubf_d_v1",
+  "type": "rule_based_supertrend",
+  "status": "research_only",
+  "instrument": {
+    "ticker": "GLDRUBF",
+    "classCode": "SPBFUT",
+    "name": "Gold RUB perpetual futures"
+  },
+  "timeframe": "D",
+  "parameters": {
+    "atr_length": 5,
+    "multiplier": 1.5,
+    "mode": "long_short_reversal",
+    "tp_pct": null,
+    "sl_pct": null,
+    "exit": "supertrend_reversal"
+  },
+  "validation": {
+    "train_trades": 24,
+    "test_trades": 9,
+    "test_profit_factor": 1.36,
+    "test_cumulative_net_return_pct": 4.99,
+    "walk_forward_positive_folds": 4,
+    "walk_forward_total_folds": 4,
+    "robustness_conclusion": "fragile_candidate"
+  },
+  "warnings": [
+    "Research only",
+    "Low number of OOS trades",
+    "Not a trading recommendation",
+    "Requires more data and live paper validation"
+  ]
+}

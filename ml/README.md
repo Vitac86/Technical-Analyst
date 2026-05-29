@@ -995,6 +995,113 @@ walk-forward report and is reconfirmed on fresh data.
 
 ---
 
+## SuperTrend GLDRUBF robustness analysis
+
+`analyze_supertrend_robustness.py` is a **pure post-processing** step. It runs
+no backtest, trains no model, and places no orders. It reads the existing grid
+CSV + summary JSON for a SuperTrend candidate and decides whether the selected
+best setup is genuinely robust, merely fragile, or should be rejected.
+
+```bash
+python ml\strategies\analyze_supertrend_robustness.py --prefix supertrend_gldrubf
+```
+
+Inputs (must already exist, produced by `backtest_supertrend.py`):
+
+```
+ml/reports/strategies/supertrend_gldrubf_grid.csv
+ml/reports/strategies/supertrend_gldrubf_summary.json
+ml/reports/strategies/supertrend_gldrubf_walk_forward.json   (optional, enriches the profile)
+```
+
+Outputs:
+
+```
+ml/reports/strategies/supertrend_gldrubf_robustness.json   (gitignored)
+ml/reports/strategies/supertrend_gldrubf_robustness.csv    (gitignored)
+ml/models/supertrend_gldrubf_research_profile.json         (tracked metadata; only if not rejected)
+```
+
+### Why `promising = false` despite a positive OOS test
+
+The backtest reports a positive out-of-sample test for the best setup
+(D / `long_short_reversal` / ATR 5 / multiplier 1.5): cumulative net **+4.99 %**,
+profit factor **1.36**, and **4 of 4** positive walk-forward folds. Yet
+`promising` is `false`. The only rejection reason is **`total_trades < 50`**:
+the OOS slice has just **9 trades**. With so few trades, a profit factor of 1.36
+and a 55.6 % win rate are not statistically reliable — a couple of trades
+flipping sign would erase the edge. The acceptance gate therefore (correctly)
+refuses to promote it to a live candidate.
+
+### Robustness neighbourhood
+
+To separate a real edge from a single lucky parameter island, the script
+re-examines the grid around the best setup:
+
+* `timeframe = D`, no TP/SL, no distance filter
+* `atr_length ∈ {5, 7, 10, 14}`
+* `multiplier ∈ {1.5, 2.0, 2.5, 3.0}`
+* all three modes: `long_short_reversal`, `long_only`, `short_only` (48 setups)
+
+A setup **passes** robustness only if its OOS metrics clear all of:
+
+| Criterion | Threshold |
+|-----------|-----------|
+| Test trades | ≥ 5 |
+| Test profit factor | > 1.10 |
+| Test average net return | > 0 % |
+| Test cumulative net return | > 0 % |
+| Test max drawdown | > −15 % |
+| Test active months | ≥ 4 |
+| Not a one-parameter island | ≥ 3 *other* same-mode neighbours with test PF > 1.0 **and** test cumulative > 0 |
+
+**Result: `fragile_candidate`.** The best reversal setup clears every numeric
+OOS criterion, but it is an **island**: only **1** other reversal neighbour
+(ATR 14 / mult 1.5) is positive — far short of the 3 required. Increasing the
+multiplier collapses the reversal edge (cumulative goes negative for every
+`multiplier ≥ 2.0`). So the OOS win is real but isolated, not a broad plateau.
+
+Conclusion mapping:
+
+* `robust_candidate` — best setup passes the OOS gate **and** has ≥ 3 supporting neighbours.
+* `fragile_candidate` — best setup passes the OOS gate but is an isolated island (**this case**).
+* `rejected` — best setup fails the OOS gate.
+
+### Long-only vs short-only vs reversal diagnosis
+
+The `direction_diagnosis` block compares the three modes at D / ATR 5 / mult 1.5:
+
+* **Long leg carries the edge.** Inside the reversal best setup the long leg is
+  strong (train PF 7.87, avg net +4.52 %) while the short leg loses
+  (train PF 0.58, avg net −0.52 %).
+* **`mostly_long = true`, `mostly_short = false`.** `short_only` is unprofitable
+  across almost the entire neighbourhood.
+* **`reversal_better_than_long_only = false`.** On the OOS test `long_only` has a
+  higher profit factor (2.44 vs 1.36) and avg net (+0.88 % vs +0.55 %) than
+  reversal; reversal's marginally higher *cumulative* return comes only from
+  extra, weaker short trades at a deeper drawdown (−5.91 % vs −2.70 %).
+* The only two setups that pass **full** robustness are both `long_only`
+  (ATR 5 / mult 1.5 and ATR 7 / mult 1.5) — `long_only` is the more robust
+  expression of this candidate. No reversal setup passes full robustness.
+
+### Research profile status
+
+Because the conclusion is `fragile_candidate` (not `rejected`), the script
+exports a small, commit-safe metadata profile:
+
+```
+ml/models/supertrend_gldrubf_research_profile.json
+```
+
+It is **not** a model binary and contains no raw candles and no tokens — just
+the parameters, the OOS validation summary, the walk-forward fold count, and
+explicit `"status": "research_only"` warnings. It exists so the app can later
+*display* (not act on) the candidate. The in-app SuperTrend panel remains a
+"research only / not validated" placeholder and is intentionally **not** wired
+to a live signal generator in this patch.
+
+---
+
 ## Disclaimer
 
 Experimental research model only. Not financial advice.
