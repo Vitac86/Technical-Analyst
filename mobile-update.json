@@ -1,1 +1,11 @@
-{"versionCode":22,"versionName":"2.0.2","apkUrl":"https://github.com/Vitac86/Technical-Analyst/releases/download/v2.0.2/technical-analyst-v2.0.2.apk","releaseDate":"2026-05-29","notes":["Fixed BCS read-only refresh token authentication","Supports trade-api-read and trade-api-write token clients","Keeps BCS tokens in session memory only"]}
+{
+  "versionCode": 23,
+  "versionName": "2.0.3",
+  "apkUrl": "https://github.com/Vitac86/Technical-Analyst/releases/download/v2.0.3/technical-analyst-v2.0.3.apk",
+  "releaseDate": "2026-05-29",
+  "notes": [
+    "Added BCS GOODS instrument discovery",
+    "Improved BCS instruments by type research tooling",
+    "Updated commodity universe research pipeline"
+  ]
+}
