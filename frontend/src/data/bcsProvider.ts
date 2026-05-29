@@ -11,12 +11,12 @@ export const bcsProvider: MarketDataProvider = {
   label: 'BCS',
 
   loadCandles({ source, timeframe, from, till }: CandleLoadParams): Promise<MoexCandle[]> {
-    const classCode = source.board || 'TQBR';
+    const classCode = source.classCode || source.board || 'TQBR';
     return loadBcsCandles(source.ticker, classCode, timeframe, from, till);
   },
 
   async loadRecentCandles(source: MoexSource, timeframe: string): Promise<MoexCandle[]> {
-    const classCode = source.board || 'TQBR';
+    const classCode = source.classCode || source.board || 'TQBR';
     return loadBcsRecentCandles(source.ticker, classCode, timeframe);
   },
 

@@ -1,11 +1,13 @@
 {
-  "versionCode": 23,
-  "versionName": "2.0.3",
-  "apkUrl": "https://github.com/Vitac86/Technical-Analyst/releases/download/v2.0.3/technical-analyst-v2.0.3.apk",
+  "versionCode": 24,
+  "versionName": "2.0.4",
+  "apkUrl": "https://github.com/Vitac86/Technical-Analyst/releases/download/v2.0.4/technical-analyst-v2.0.4.apk",
   "releaseDate": "2026-05-29",
   "notes": [
-    "Added BCS GOODS instrument discovery",
-    "Improved BCS instruments by type research tooling",
-    "Updated commodity universe research pipeline"
+    "Added BCS GOODS instruments to search",
+    "Added commodity instrument support for GOLD/BRENT/metals",
+    "Fixed scroll behavior in instrument search results",
+    "Improved search result source badges",
+    "Improved BCS instrument selection"
   ]
 }

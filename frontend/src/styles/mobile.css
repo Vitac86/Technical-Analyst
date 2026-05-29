@@ -106,6 +106,12 @@
   text-overflow: ellipsis;
 }
 
+.mc-source-chip-bcs {
+  border-color: rgba(231, 191, 109, 0.45);
+  background: rgba(231, 191, 109, 0.12);
+  color: #e7bf6d;
+}
+
 /* ── Live status badge ───────────────────────────────────────────────────── */
 
 .mc-live-badge {
@@ -222,6 +228,8 @@
   max-height: 260px;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
 }
 
@@ -238,8 +246,9 @@
   padding: 10px 14px;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+  touch-action: pan-y;
   border-bottom: 1px solid #1e2530;
-  min-height: 52px;
+  min-height: 60px;
 }
 
 .mc-search-dropdown li:last-child {
@@ -273,17 +282,53 @@
 
 .mc-sr-meta {
   grid-area: meta;
-  font-size: 10px;
-  font-weight: 700;
-  color: #6baed6;
-  background: #1a2840;
-  border: 1px solid #2a4870;
-  border-radius: 4px;
-  padding: 3px 8px;
-  white-space: nowrap;
-  font-family: ui-monospace, monospace;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
   justify-self: end;
   align-self: center;
+  flex-shrink: 0;
+}
+
+.mc-result-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 94px;
+  min-height: 18px;
+  border-radius: 4px;
+  border: 1px solid #2a4870;
+  background: #1a2840;
+  color: #6baed6;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 3px 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, monospace;
+  box-sizing: border-box;
+}
+
+.mc-result-chip-bcs {
+  border-color: rgba(231, 191, 109, 0.45);
+  background: rgba(231, 191, 109, 0.12);
+  color: #e7bf6d;
+}
+
+.mc-result-chip-moex {
+  border-color: rgba(107, 174, 214, 0.45);
+}
+
+.mc-search-hint-row {
+  display: block !important;
+  min-height: 0 !important;
+  padding: 8px 12px !important;
+  color: #e7bf6d;
+  font-size: 11px;
+  cursor: default !important;
+  touch-action: pan-y;
 }
 
 /* ── Controls (timeframe + date presets) ─────────────────────────────────── */
@@ -937,13 +982,22 @@
   font-weight: 600;
 }
 
+.mc-drawer-search-hint {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #e7bf6d;
+  font-weight: 600;
+}
+
 .mc-drawer-search-list {
   list-style: none;
   margin: 6px 0 0;
   padding: 0;
-  max-height: 220px;
+  max-height: min(45vh, 320px);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   border: 1px solid #344050;
   border-radius: 7px;
   background: #1b2028;
@@ -963,8 +1017,8 @@
   cursor: pointer;
   border-bottom: 1px solid #1e2530;
   -webkit-tap-highlight-color: transparent;
-  touch-action: manipulation;
-  min-height: 50px;
+  touch-action: pan-y;
+  min-height: 60px;
 }
 
 .mc-drawer-search-list li:last-child {
@@ -998,17 +1052,13 @@
 
 .mc-dsr-meta {
   grid-area: meta;
-  font-size: 10px;
-  font-weight: 700;
-  color: #6baed6;
-  background: #1a2840;
-  border: 1px solid #2a4870;
-  border-radius: 4px;
-  padding: 2px 7px;
-  font-family: ui-monospace, monospace;
-  white-space: nowrap;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
   justify-self: end;
   align-self: center;
+  flex-shrink: 0;
 }
 
 /* ── Watchlist ───────────────────────────────────────────────────────────── */
@@ -1017,6 +1067,8 @@
   flex: 1;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
 }
 
 .mc-drawer-empty {
@@ -2009,7 +2061,7 @@
 .mc-drawer-footer-version{font-size:11px;color:var(--mc-dim)}
 .mc-drawer-settings-btn{display:flex;align-items:center;gap:6px;padding:8px 14px;background:var(--mc-chip-bg);border:1px solid var(--mc-border);border-radius:8px;color:var(--mc-muted);font-size:13px;font-weight:500;cursor:pointer;touch-action:manipulation;min-height:36px}
 .mc-drawer-settings-btn:active{background:var(--mc-chip-active-bg)}
-.mc-dsr-added{font-size:10px;color:var(--mc-green);font-weight:600;border:1px solid var(--mc-green);border-radius:3px;padding:1px 5px;margin-left:auto}
+.mc-dsr-added{color:var(--mc-green);border-color:rgba(49,177,129,.55);background:rgba(49,177,129,.1)}
 .mc-drawer-empty-title{font-size:14px;font-weight:600;color:var(--mc-text);margin:0 0 4px}
 .mc-drawer-empty-sub{font-size:12px;color:var(--mc-muted);margin:0 0 12px}
 .mc-edit-order-btns{display:flex;flex-direction:column;gap:2px}

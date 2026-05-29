@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { fetchMoexQuote, searchMoex } from '../../api/moexDirect';
-import type { MoexQuote, MoexSearchResult } from '../../api/moexDirect';
+import type { PointerEvent as ReactPointerEvent } from 'react';
+import { fetchMoexQuote } from '../../api/moexDirect';
+import type { MoexQuote } from '../../api/moexDirect';
+import { searchMobileAssets } from '../../api/mobileAssetSearch';
+import type { MobileAssetSearchResult } from '../../api/mobileAssetSearch';
 import { makeAssetId } from '../../utils/mobileWatchlist';
 import type { WatchlistAsset } from '../../utils/mobileWatchlist';
 import { CURRENT_APP_VERSION_NAME } from '../../api/appUpdate';
@@ -12,6 +15,7 @@ type DrawerQuoteState = {
 };
 
 const QUOTE_POLL_MS = 30000;
+const SEARCH_DRAG_THRESHOLD_PX = 9;
 
 type Props = {
   open: boolean;
@@ -21,6 +25,13 @@ type Props = {
   onSelect: (asset: WatchlistAsset) => void;
   onWatchlistChange: (list: WatchlistAsset[]) => void;
   onSettingsOpen?: () => void;
+};
+
+type SearchPointerState = {
+  key: string;
+  startX: number;
+  startY: number;
+  dragging: boolean;
 };
 
 function formatQuotePrice(price: number): string {
@@ -43,13 +54,33 @@ function quoteTone(changePercent: number): string {
   return 'flat';
 }
 
+function searchResultKey(r: MobileAssetSearchResult): string {
+  return `${r.sourceProvider}:${r.engine}:${r.market}:${r.board}:${r.ticker}`;
+}
+
+function resultSourceLabel(r: MobileAssetSearchResult): string {
+  if (r.sourceProvider === 'bcs') return r.assetGroup === 'goods' ? 'BCS GOODS' : 'BCS';
+  return 'MOEX';
+}
+
+function formatAssetMeta(asset: WatchlistAsset): string {
+  if (asset.sourceProvider === 'bcs') {
+    const label = asset.assetGroup === 'goods' ? 'BCS GOODS' : 'BCS';
+    return `${asset.classCode || asset.board} / ${label}`;
+  }
+  if (asset.market === 'selt') return `FX / ${asset.board}`;
+  if (asset.market === 'forts') return `FORTS / ${asset.board}`;
+  return asset.board;
+}
+
 export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, onWatchlistChange, onSettingsOpen }: Props) {
   const { t } = useTranslation();
   const [editMode,       setEditMode]       = useState(false);
   const [showSearch,     setShowSearch]     = useState(false);
   const [searchQuery,    setSearchQuery]    = useState('');
-  const [searchResults,  setSearchResults]  = useState<MoexSearchResult[]>([]);
+  const [searchResults,  setSearchResults]  = useState<MobileAssetSearchResult[]>([]);
   const [searchLoading,  setSearchLoading]  = useState(false);
+  const [bcsTokenHint,   setBcsTokenHint]   = useState(false);
   const [dupMsg,         setDupMsg]         = useState(false);
   const [quotes,         setQuotes]         = useState<Record<string, DrawerQuoteState>>({});
 
@@ -61,6 +92,7 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const quoteInFlightRef = useRef(false);
+  const searchPointerRef = useRef<SearchPointerState | null>(null);
 
   // Reset local UI state after drawer closes (after slide-out animation)
   useEffect(() => {
@@ -70,9 +102,11 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
         setShowSearch(false);
         setSearchQuery('');
         setSearchResults([]);
+        setBcsTokenHint(false);
         setDupMsg(false);
         setDragId(null);
         setDragOverId(null);
+        searchPointerRef.current = null;
       }, 280);
       return () => clearTimeout(tmr);
     }
@@ -80,13 +114,20 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
 
   const triggerSearch = useCallback((q: string) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (q.trim().length < 2) { setSearchResults([]); return; }
+    if (q.trim().length < 2) {
+      setSearchResults([]);
+      setBcsTokenHint(false);
+      return;
+    }
     debounceRef.current = setTimeout(async () => {
       setSearchLoading(true);
       try {
-        setSearchResults(await searchMoex(q.trim()));
+        const response = await searchMobileAssets(q.trim());
+        setSearchResults(response.results);
+        setBcsTokenHint(response.bcsTokenRequired);
       } catch {
         setSearchResults([]);
+        setBcsTokenHint(false);
       } finally {
         setSearchLoading(false);
       }
@@ -113,6 +154,9 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
 
       try {
         const entries = await Promise.all(snapshot.map(async asset => {
+          if (asset.sourceProvider === 'bcs') {
+            return [asset.id, { quote: null, error: false }] as const;
+          }
           try {
             const quote = await fetchMoexQuote(asset, controller.signal);
             return [asset.id, { quote, error: false }] as const;
@@ -150,7 +194,7 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
     triggerSearch(val);
   }
 
-  function handleAddResult(r: MoexSearchResult) {
+  function handleAddResult(r: MobileAssetSearchResult) {
     const id = makeAssetId(r.engine, r.market, r.board, r.ticker);
     if (watchlist.some(a => a.id === id)) {
       setDupMsg(true);
@@ -164,10 +208,47 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
       engine: r.engine,
       market: r.market,
       board:  r.board,
+      sourceProvider: r.sourceProvider,
+      assetGroup: r.assetGroup,
+      classCode: r.classCode ?? r.board,
+      instrumentType: r.instrumentType,
+      tradingCurrency: r.tradingCurrency,
     };
     onWatchlistChange([...watchlist, newAsset]);
     onSelect(newAsset);
     onClose();
+  }
+
+  function handleSearchResultPointerDown(key: string, e: ReactPointerEvent<HTMLLIElement>) {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    searchPointerRef.current = {
+      key,
+      startX: e.clientX,
+      startY: e.clientY,
+      dragging: false,
+    };
+  }
+
+  function handleSearchResultPointerMove(e: ReactPointerEvent<HTMLLIElement>) {
+    const state = searchPointerRef.current;
+    if (!state || state.dragging) return;
+
+    const dx = e.clientX - state.startX;
+    const dy = e.clientY - state.startY;
+    if (Math.hypot(dx, dy) > SEARCH_DRAG_THRESHOLD_PX) {
+      state.dragging = true;
+    }
+  }
+
+  function handleSearchResultPointerUp(r: MobileAssetSearchResult, key: string) {
+    const state = searchPointerRef.current;
+    searchPointerRef.current = null;
+    if (!state || state.key !== key || state.dragging) return;
+    handleAddResult(r);
+  }
+
+  function clearSearchPointer() {
+    searchPointerRef.current = null;
   }
 
   function handleDelete(id: string) {
@@ -309,21 +390,34 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
               {searchLoading && <span className="mc-drawer-search-spin">…</span>}
             </div>
             {dupMsg && <div className="mc-drawer-dup-msg">{t('drawer.duplicate')}</div>}
+            {bcsTokenHint && (
+              <div className="mc-drawer-search-hint">{t('drawer.search.bcsTokenRequired')}</div>
+            )}
             {searchResults.length > 0 && (
               <ul className="mc-drawer-search-list">
                 {searchResults.map(r => {
                   const resultId = makeAssetId(r.engine, r.market, r.board, r.ticker);
                   const isAdded = watchlist.some(a => a.id === resultId);
+                  const key = searchResultKey(r);
                   return (
                     <li
-                      key={`${r.engine}:${r.market}:${r.board}:${r.ticker}`}
+                      key={key}
                       style={isAdded ? { opacity: 0.6 } : undefined}
-                      onPointerDown={isAdded ? undefined : () => handleAddResult(r)}
+                      aria-disabled={isAdded}
+                      onPointerDown={isAdded ? undefined : e => handleSearchResultPointerDown(key, e)}
+                      onPointerMove={isAdded ? undefined : handleSearchResultPointerMove}
+                      onPointerUp={isAdded ? undefined : () => handleSearchResultPointerUp(r, key)}
+                      onPointerCancel={clearSearchPointer}
                     >
                       <span className="mc-dsr-ticker">{r.ticker}</span>
                       <span className="mc-dsr-name">{r.name}</span>
-                      <span className="mc-dsr-meta">{r.board}</span>
-                      {isAdded && <span className="mc-dsr-added">{t('drawer.added')}</span>}
+                      <span className="mc-dsr-meta">
+                        <span className="mc-result-chip mc-result-chip-board">{r.board}</span>
+                        <span className={`mc-result-chip ${r.sourceProvider === 'bcs' ? 'mc-result-chip-bcs' : 'mc-result-chip-moex'}`}>
+                          {resultSourceLabel(r)}
+                        </span>
+                        {isAdded && <span className="mc-result-chip mc-dsr-added">{t('drawer.added')}</span>}
+                      </span>
                     </li>
                   );
                 })}
@@ -397,7 +491,9 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
                         <span className="mc-drawer-item-name">{asset.name}</span>
                       )}
                       <span className="mc-drawer-item-meta">
-                        {asset.market === 'selt'
+                        {asset.sourceProvider === 'bcs'
+                          ? formatAssetMeta(asset)
+                          : asset.market === 'selt'
                           ? `FX · ${asset.board}`
                           : asset.market === 'forts'
                             ? `FORTS · ${asset.board}`

@@ -7,6 +7,11 @@ export type WatchlistAsset = {
   engine: string;
   market: string;
   board: string;
+  sourceProvider?: 'moex' | 'bcs';
+  assetGroup?: 'goods' | 'stock' | 'fx' | 'unknown';
+  classCode?: string;
+  instrumentType?: string;
+  tradingCurrency?: string;
 };
 
 const LS_KEY = 'technicalAnalyst.mobile.watchlist';
@@ -37,6 +42,14 @@ export function loadWatchlist(): WatchlistAsset[] {
         engine: String(a.engine ?? ''),
         market: String(a.market ?? ''),
         board:  String(a.board ?? ''),
+        sourceProvider: a.sourceProvider === 'bcs' ? 'bcs' : 'moex',
+        assetGroup:
+          a.assetGroup === 'goods' || a.assetGroup === 'stock' || a.assetGroup === 'fx'
+            ? a.assetGroup
+            : 'unknown',
+        classCode: typeof a.classCode === 'string' ? a.classCode : String(a.board ?? ''),
+        instrumentType: typeof a.instrumentType === 'string' ? a.instrumentType : undefined,
+        tradingCurrency: typeof a.tradingCurrency === 'string' ? a.tradingCurrency : undefined,
       })) as WatchlistAsset[];
     }
   } catch { /* unavailable */ }

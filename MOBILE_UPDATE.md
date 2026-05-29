@@ -66,3 +66,7 @@ Store `release.jks` securely and never commit it to the repository.
 ## v2.0.0 (2026-05-29)
 Tag: v2.0.0 APK: technical-analyst-v2.0.0.apk versionCode: 20
 Changes: BCS order book, live fix, Settings hub, drawer UX, chart layout, AI research-only.
+
+## v2.0.4 (2026-05-29)
+Tag: v2.0.4 APK: technical-analyst-v2.0.4.apk versionCode: 24
+Changes: BCS GOODS search integration, GOLD/BRENT/metals support, touch-safe search scrolling, source badges, BCS-only provider routing.

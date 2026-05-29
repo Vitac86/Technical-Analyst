@@ -13,7 +13,8 @@ const STRINGS: Record<Lang, Dict> = {
   ru: {
     // Drawer
     "drawer.assets": "Активы",
-    "drawer.search.placeholder": "Поиск на MOEX…",
+    "drawer.search.placeholder": "Поиск MOEX и BCS…",
+    "drawer.search.bcsTokenRequired": "Для BCS GOODS требуется токен BCS",
     "drawer.add": "+ Добавить",
     "drawer.add.asset": "+ Добавить актив",
     "drawer.manage": "Управление",
@@ -94,7 +95,7 @@ const STRINGS: Record<Lang, Dict> = {
     "settings.about.app": "Technical Analyst",
     "settings.about.sources": "Источники данных",
     "settings.about.sources.moex": "MOEX — публичный API Московской биржи",
-    "settings.about.sources.bcs": "BCS Broker — авторизованные данные портфеля и заявок (эксп.)",
+    "settings.about.sources.bcs": "BCS Broker — авторизованные рыночные данные (эксп.)",
     "settings.about.analysis": "ИИ и анализ",
     "settings.about.analysis.local": "Весь ИИ-инференс выполняется на устройстве",
     "settings.about.analysis.noexternal": "Данные анализа не передаются на внешние серверы",
@@ -123,6 +124,7 @@ const STRINGS: Record<Lang, Dict> = {
     "chart.olderNone": "Старых свечей нет",
     "chart.olderError": "Не удалось загрузить старые свечи",
     "chart.search.placeholder": "Поиск тикера…",
+    "chart.search.bcsTokenRequired": "Для BCS GOODS требуется токен BCS",
     "chart.last": "Послед.",
     "chart.refreshTime": "Обновлено",
     "chart.refreshFailed": "Сбой обновления",
@@ -165,7 +167,8 @@ const STRINGS: Record<Lang, Dict> = {
   en: {
     // Drawer
     "drawer.assets": "Assets",
-    "drawer.search.placeholder": "Search MOEX…",
+    "drawer.search.placeholder": "Search MOEX and BCS…",
+    "drawer.search.bcsTokenRequired": "BCS token required for GOODS",
     "drawer.add": "+ Add",
     "drawer.add.asset": "+ Add asset",
     "drawer.manage": "Manage",
@@ -250,7 +253,7 @@ const STRINGS: Record<Lang, Dict> = {
     "settings.about.app": "Technical Analyst",
     "settings.about.sources": "Data Sources",
     "settings.about.sources.moex": "MOEX — Moscow Exchange public market data API",
-    "settings.about.sources.bcs": "BCS Broker — authenticated portfolio and order data (experimental)",
+    "settings.about.sources.bcs": "BCS Broker — authenticated market data (experimental)",
     "settings.about.analysis": "AI & Analysis",
     "settings.about.analysis.local": "All AI inference runs locally on-device",
     "settings.about.analysis.noexternal": "No analysis data is sent to external servers",
@@ -279,6 +282,7 @@ const STRINGS: Record<Lang, Dict> = {
     "chart.olderNone": "No older candles",
     "chart.olderError": "Could not load older candles",
     "chart.search.placeholder": "Search ticker…",
+    "chart.search.bcsTokenRequired": "BCS token required for GOODS",
     "chart.last": "Last",
     "chart.refreshTime": "Refresh",
     "chart.refreshFailed": "Refresh failed",

@@ -167,6 +167,26 @@ Response shape:
 - Each bar has `time` (UTC ISO 8601), `open`, `high`, `low`, `close`, `volume`
 - The app converts `time` from UTC to Moscow time (+3h) to match MOEX display convention
 
+### Instrument discovery by type
+
+```
+GET /trade-api-information-service/api/v1/instruments/by-type
+
+Query params:
+  type  -- GOODS
+  size  -- 50
+  page  -- 0-based page number
+```
+
+The app uses this endpoint for authenticated BCS GOODS discovery in mobile
+asset search. GOODS instruments are normalized as BCS-only assets:
+
+- `ticker` / `secid` is preserved exactly from BCS, e.g. `GOLD`, `BRENT0826`, `AL3M`
+- `classCode` / `boardid` is preserved exactly from BCS, e.g. `GOLD` uses `FEG`, metals such as `AL3M` and `COPPER3M` use `FEM`, and `ETH` uses `FEV`
+- GOODS results show source badge `BCS GOODS` and board chip `FEG` / `FEM` / `FEV`
+- The app must not remap GOODS instruments to MOEX `TQBR`
+- A BCS refresh token, or a private build default token, is required before GOODS instruments can be discovered
+
 ---
 
 ## Safe range policy (initial load)
@@ -211,6 +231,8 @@ Lazy loading only runs in BCS mode with a live BCS connection (not BCS→MOEX fa
 - `ticker` comes from the selected instrument's `secid` / ticker (e.g. `SBER`)
 - `classCode` comes from the selected instrument's `boardid` / board (e.g. `TQBR`)
 - For MOEX shares, `TQBR` is the correct `classCode`; do not use `SPBRU` for Moscow-listed shares
+- For BCS GOODS, use the BCS `classCode` exactly. Example: `GOLD` must use `FEG`; do not send it to MOEX `TQBR`.
+- When a selected asset has `sourceProvider="bcs"`, the app routes candles, recent candles, lazy older candles, and order book requests to BCS even if the global provider setting is MOEX.
 
 ---
 
@@ -232,6 +254,7 @@ When **Fallback to MOEX** is enabled (default):
 - A compact yellow warning is shown: **BCS unavailable, using MOEX**.
 - The footer shows: **Data: BCS→MOEX**.
 - Lazy older-candle loading is disabled while in fallback mode.
+- BCS-only GOODS assets do not fall back to MOEX. If the token is missing, the chart shows: **BCS token required for this instrument**.
 
 When fallback is disabled:
 - BCS failures show a readable error message.

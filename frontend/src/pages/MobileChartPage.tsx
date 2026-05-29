@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 
 import { MobilePriceChart }   from '../components/mobile/MobilePriceChart';
 import { AssetDrawer }        from '../components/mobile/AssetDrawer';
 import { AiSignalPanel }      from '../components/mobile/AiSignalPanel';
 import { SettingsModal }      from '../components/mobile/SettingsModal';
 import { OrderBookPanel }     from '../components/mobile/OrderBookPanel';
-import { searchMoex }         from '../api/moexDirect';
-import type { MoexCandle, MoexSearchResult, MoexSource } from '../api/moexDirect';
+import type { MoexCandle, MoexSource } from '../api/moexDirect';
+import { searchMobileAssets } from '../api/mobileAssetSearch';
+import type { MobileAssetSearchResult } from '../api/mobileAssetSearch';
 import { getProvider }        from '../data/providerRegistry';
 import type { MarketDataProviderId } from '../data/types';
 import { loadWatchlist, makeAssetId, saveWatchlist } from '../utils/mobileWatchlist';
@@ -48,8 +50,16 @@ const SAFE_DATE_PRESETS: Record<Timeframe, readonly DatePreset[]> = {
 
 type LiveStatus = 'live' | 'paused' | 'error' | 'stale' | 'reconnecting';
 
+type SearchPointerState = {
+  key: string;
+  startX: number;
+  startY: number;
+  dragging: boolean;
+};
+
 const MOEX_POLL_MS: Record<string,number> = {"5m":3000,"15m":5000,"1h":5000,"4h":10000};
 const BCS_POLL_MS:  Record<string,number> = {"5m":5000,"15m":10000,"1h":10000,"4h":15000};
+const SEARCH_DRAG_THRESHOLD_PX = 9;
 
 const MOEX_INTERVAL_LABEL: Record<Timeframe, string> = {
   '5m':  '1m -> 5m',
@@ -152,11 +162,16 @@ function dedupeSortedCandles(candles: MoexCandle[]): MoexCandle[] {
 // ---------------------------------------------------------------------------
 
 function initSource(): MoexSource {
+  const sourceProvider = lsGet('sourceProvider') === 'bcs' ? 'bcs' : 'moex';
+  const board = lsGet('board') ?? 'TQBR';
   return {
     ticker: lsGet('ticker') ?? 'SBER',
     engine: lsGet('engine') ?? 'stock',
     market: lsGet('market') ?? 'shares',
-    board:  lsGet('board')  ?? 'TQBR',
+    board,
+    sourceProvider,
+    assetGroup: (lsGet('assetGroup') as MoexSource['assetGroup']) ?? (sourceProvider === 'bcs' ? 'goods' : 'stock'),
+    classCode: lsGet('classCode') ?? board,
   };
 }
 
@@ -201,11 +216,39 @@ function initFallbackEnabled(): boolean {
 // Source display helper
 // ---------------------------------------------------------------------------
 
+function isBcsSource(src: MoexSource): boolean {
+  return src.sourceProvider === 'bcs';
+}
+
+function getEffectiveProvider(
+  globalProviderId: MarketDataProviderId,
+  src: MoexSource,
+): MarketDataProviderId {
+  return isBcsSource(src) ? 'bcs' : globalProviderId;
+}
+
+function bcsAssetErrorMessage(err: unknown): string {
+  const msg = err instanceof Error ? err.message : 'BCS load failed.';
+  return msg.toLowerCase().includes('no bcs refresh token')
+    ? 'BCS token required for this instrument'
+    : msg;
+}
+
 function formatSource(src: MoexSource): string {
+  if (isBcsSource(src)) return src.classCode || src.board;
   if (src.market === 'selt')  return `FX · ${src.board}`;
   if (src.market === 'forts') return `FORTS · ${src.board}`;
   if (src.market === 'bonds') return `BONDS · ${src.board}`;
   return src.board;
+}
+
+function searchResultKey(r: MobileAssetSearchResult): string {
+  return `${r.sourceProvider}:${r.engine}:${r.market}:${r.board}:${r.ticker}`;
+}
+
+function resultSourceLabel(r: MobileAssetSearchResult): string {
+  if (r.sourceProvider === 'bcs') return r.assetGroup === 'goods' ? 'BCS GOODS' : 'BCS';
+  return 'MOEX';
 }
 
 // ---------------------------------------------------------------------------
@@ -231,9 +274,10 @@ export function MobileChartPage() {
   const [lastUpdateTime,  setLastUpdateTime]  = useState<string | null>(null);
 
   const [searchQuery,   setSearchQuery]   = useState('');
-  const [searchResults, setSearchResults] = useState<MoexSearchResult[]>([]);
+  const [searchResults, setSearchResults] = useState<MobileAssetSearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchOpen,    setSearchOpen]    = useState(false);
+  const [searchBcsTokenHint, setSearchBcsTokenHint] = useState(false);
 
   const [drawerOpen,      setDrawerOpen]      = useState(false);
   const [watchlist,       setWatchlist]       = useState<WatchlistAsset[]>(loadWatchlist);
@@ -263,6 +307,7 @@ export function MobileChartPage() {
   const debounceRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
   const aiDebounceRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchBoxRef    = useRef<HTMLDivElement | null>(null);
+  const searchPointerRef = useRef<SearchPointerState | null>(null);
   const loadGenRef      = useRef(0);
   const liveInFlightRef = useRef(false);
   const olderInFlightRef = useRef(false);
@@ -305,18 +350,21 @@ export function MobileChartPage() {
     }
 
     const params = { source: src, timeframe: tf, from: fromDate(preset), till: today() };
+    const effectiveProvider = getEffectiveProvider(provId, src);
+    const bcsOnlyAsset = isBcsSource(src);
+    setProviderStatus(effectiveProvider);
 
     try {
       let data: MoexCandle[];
 
-      if (provId === 'bcs') {
+      if (effectiveProvider === 'bcs') {
         try {
           data = await getProvider('bcs').loadCandles(params);
           if (gen !== loadGenRef.current) return;
           setProviderStatus('bcs');
         } catch (bcsErr) {
           if (gen !== loadGenRef.current) return;
-          if (fbEnabled) {
+          if (fbEnabled && !bcsOnlyAsset) {
             // Fall back to MOEX and show a compact warning
             data = await getProvider('moex').loadCandles(params);
             if (gen !== loadGenRef.current) return;
@@ -325,7 +373,9 @@ export function MobileChartPage() {
             setFallbackWarning(`BCS unavailable, using MOEX · ${msg}`);
           } else {
             // No fallback — keep existing chart data and surface error
-            const msg = bcsErr instanceof Error ? bcsErr.message : 'BCS load failed.';
+            const msg = bcsOnlyAsset
+              ? bcsAssetErrorMessage(bcsErr)
+              : bcsErr instanceof Error ? bcsErr.message : 'BCS load failed.';
             setError(msg);
             setLoading(false);
             return;
@@ -355,7 +405,7 @@ export function MobileChartPage() {
     if (olderInFlightRef.current) return;
     if (isLoadingOlder) return;
     if (noMoreOlderCandles) return;
-    if (providerId !== 'bcs') return;
+    if (getEffectiveProvider(providerId, source) !== 'bcs') return;
     if (providerStatus === 'bcs-fallback') return; // data is MOEX, don't try BCS older
 
     const currentCandles = fullCandlesRef.current;
@@ -378,7 +428,7 @@ export function MobileChartPage() {
         return;
       }
 
-      const classCode = source.board || 'TQBR';
+      const classCode = source.classCode || source.board || 'TQBR';
       let olderCandles: MoexCandle[];
       try {
         olderCandles = await loadBcsOlderChunk(source.ticker, classCode, timeframe, oldestDate);
@@ -420,6 +470,9 @@ export function MobileChartPage() {
     lsSet('engine', source.engine);
     lsSet('market', source.market);
     lsSet('board',  source.board);
+    lsSet('sourceProvider', source.sourceProvider ?? 'moex');
+    lsSet('assetGroup', source.assetGroup ?? 'unknown');
+    lsSet('classCode', source.classCode ?? source.board);
   }, [source]);
   useEffect(() => { lsSet('timeframe',        timeframe);  }, [timeframe]);
   useEffect(() => { lsSet('datePreset',        datePreset); }, [datePreset]);
@@ -458,7 +511,8 @@ export function MobileChartPage() {
 
       liveInFlightRef.current = true;
       try {
-        const recent = await getProvider(providerId).loadRecentCandles(source, timeframe);
+        const effectiveProvider = getEffectiveProvider(providerId, source);
+        const recent = await getProvider(effectiveProvider).loadRecentCandles(source, timeframe);
         if (cancelled) return;
         if (recent.length > 0) {
           setLiveCandle(recent[recent.length - 1]);
@@ -479,7 +533,8 @@ export function MobileChartPage() {
     }
 
     void pollOnce();
-    const pollMs = (providerId==="bcs" ? BCS_POLL_MS[timeframe] : MOEX_POLL_MS[timeframe]) ?? 5000;
+    const effectiveProvider = getEffectiveProvider(providerId, source);
+    const pollMs = (effectiveProvider==="bcs" ? BCS_POLL_MS[timeframe] : MOEX_POLL_MS[timeframe]) ?? 5000;
     const id = setInterval(() => { void pollOnce(); }, pollMs);
     document.addEventListener('visibilitychange', onVisibilityChange);
 
@@ -523,17 +578,20 @@ export function MobileChartPage() {
     if (q.trim().length < 2) {
       setSearchResults([]);
       setSearchOpen(false);
+      setSearchBcsTokenHint(false);
       return;
     }
     debounceRef.current = setTimeout(async () => {
       setSearchLoading(true);
       try {
-        const results = await searchMoex(q.trim());
-        setSearchResults(results);
-        setSearchOpen(results.length > 0);
+        const response = await searchMobileAssets(q.trim());
+        setSearchResults(response.results);
+        setSearchBcsTokenHint(response.bcsTokenRequired);
+        setSearchOpen(response.results.length > 0 || response.bcsTokenRequired);
       } catch {
         setSearchResults([]);
         setSearchOpen(false);
+        setSearchBcsTokenHint(false);
       } finally {
         setSearchLoading(false);
       }
@@ -545,19 +603,72 @@ export function MobileChartPage() {
     triggerSearch(val);
   }
 
-  function handleSelectResult(r: MoexSearchResult) {
-    const newSrc: MoexSource = { ticker: r.ticker, engine: r.engine, market: r.market, board: r.board };
+  function handleSelectResult(r: MobileAssetSearchResult) {
+    const newSrc: MoexSource = {
+      ticker: r.ticker,
+      engine: r.engine,
+      market: r.market,
+      board: r.board,
+      sourceProvider: r.sourceProvider,
+      assetGroup: r.assetGroup,
+      classCode: r.classCode ?? r.board,
+      instrumentType: r.instrumentType,
+      tradingCurrency: r.tradingCurrency,
+    };
     setSource(newSrc);
     setSearchQuery('');
     setSearchOpen(false);
     setSearchResults([]);
+    setSearchBcsTokenHint(false);
     void loadCandles(newSrc, timeframe, datePreset);
+  }
+
+  function handleSearchResultPointerDown(key: string, e: ReactPointerEvent<HTMLLIElement>) {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    searchPointerRef.current = {
+      key,
+      startX: e.clientX,
+      startY: e.clientY,
+      dragging: false,
+    };
+  }
+
+  function handleSearchResultPointerMove(e: ReactPointerEvent<HTMLLIElement>) {
+    const state = searchPointerRef.current;
+    if (!state || state.dragging) return;
+
+    const dx = e.clientX - state.startX;
+    const dy = e.clientY - state.startY;
+    if (Math.hypot(dx, dy) > SEARCH_DRAG_THRESHOLD_PX) {
+      state.dragging = true;
+    }
+  }
+
+  function handleSearchResultPointerUp(r: MobileAssetSearchResult, key: string) {
+    const state = searchPointerRef.current;
+    searchPointerRef.current = null;
+    if (!state || state.key !== key || state.dragging) return;
+    handleSelectResult(r);
+  }
+
+  function clearSearchPointer() {
+    searchPointerRef.current = null;
   }
 
   // ── Drawer: asset selection ───────────────────────────────────────────────
 
   function handleSelectFromDrawer(asset: WatchlistAsset) {
-    const newSrc: MoexSource = { ticker: asset.ticker, engine: asset.engine, market: asset.market, board: asset.board };
+    const newSrc: MoexSource = {
+      ticker: asset.ticker,
+      engine: asset.engine,
+      market: asset.market,
+      board: asset.board,
+      sourceProvider: asset.sourceProvider ?? 'moex',
+      assetGroup: asset.assetGroup,
+      classCode: asset.classCode ?? asset.board,
+      instrumentType: asset.instrumentType,
+      tradingCurrency: asset.tradingCurrency,
+    };
     setSource(newSrc);
     void loadCandles(newSrc, timeframe, datePreset);
   }
@@ -618,6 +729,7 @@ export function MobileChartPage() {
 
   const hasData    = fullCandles.length > 0;
   const noData     = !hasData && !loading && !error;
+  const effectiveProviderId = getEffectiveProvider(providerId, source);
   const selectedId = makeAssetId(source.engine, source.market, source.board, source.ticker);
   const firstCandle = fullCandles[0] ?? null;
   const lastFullCandle = fullCandles[fullCandles.length - 1] ?? null;
@@ -645,7 +757,13 @@ export function MobileChartPage() {
   const compactError = error && hasData ? error : null;
 
   // Lazy loading is only offered in BCS mode on a live BCS provider (not fallback).
-  const olderLoadEnabled = providerId === 'bcs' && providerStatus === 'bcs' && hasData;
+  const olderLoadEnabled = effectiveProviderId === 'bcs' && providerStatus === 'bcs' && hasData;
+  const providerStatusLabel =
+    providerStatus === 'moex'
+      ? 'MOEX'
+      : providerStatus === 'bcs'
+        ? (isBcsSource(source) && providerId !== 'bcs' ? 'BCS (asset)' : 'BCS')
+        : 'BCSв†’MOEX';
 
   // ── Render ────────────────────────────────────────────────────────────────
 
@@ -686,6 +804,11 @@ export function MobileChartPage() {
         <div className="mc-header-left">
           <span className="mc-ticker">{source.ticker}</span>
           <span className="mc-source-chip">{formatSource(source)}</span>
+          {isBcsSource(source) ? (
+            <span className="mc-source-chip mc-source-chip-bcs">
+              {source.assetGroup === 'goods' ? 'BCS GOODS' : 'BCS'}
+            </span>
+          ) : null}
         </div>
         <div className="mc-header-right">
           <span className={`mc-live-badge mc-live-badge--${liveBadgeTone}`}>
@@ -709,23 +832,39 @@ export function MobileChartPage() {
             autoCapitalize="characters"
             spellCheck={false}
             onChange={e => handleSearchInput(e.target.value)}
-            onFocus={() => { if (searchResults.length > 0) setSearchOpen(true); }}
+            onFocus={() => { if (searchResults.length > 0 || searchBcsTokenHint) setSearchOpen(true); }}
           />
           {searchLoading ? <span className="mc-search-spinner">…</span> : null}
         </div>
 
-        {searchOpen && searchResults.length > 0 ? (
+        {searchOpen && (searchResults.length > 0 || searchBcsTokenHint) ? (
           <ul className="mc-search-dropdown">
-            {searchResults.map(r => (
-              <li
-                key={`${r.engine}-${r.market}-${r.board}-${r.ticker}`}
-                onPointerDown={() => handleSelectResult(r)}
-              >
-                <span className="mc-sr-ticker">{r.ticker}</span>
-                <span className="mc-sr-name">{r.name}</span>
-                <span className="mc-sr-meta">{r.board}</span>
+            {searchBcsTokenHint ? (
+              <li className="mc-search-hint-row" aria-disabled="true">
+                {t('chart.search.bcsTokenRequired')}
               </li>
-            ))}
+            ) : null}
+            {searchResults.map(r => {
+              const key = searchResultKey(r);
+              return (
+                <li
+                  key={key}
+                  onPointerDown={e => handleSearchResultPointerDown(key, e)}
+                  onPointerMove={handleSearchResultPointerMove}
+                  onPointerUp={() => handleSearchResultPointerUp(r, key)}
+                  onPointerCancel={clearSearchPointer}
+                >
+                  <span className="mc-sr-ticker">{r.ticker}</span>
+                  <span className="mc-sr-name">{r.name}</span>
+                  <span className="mc-sr-meta">
+                    <span className="mc-result-chip mc-result-chip-board">{r.board}</span>
+                    <span className={`mc-result-chip ${r.sourceProvider === 'bcs' ? 'mc-result-chip-bcs' : 'mc-result-chip-moex'}`}>
+                      {resultSourceLabel(r)}
+                    </span>
+                  </span>
+                </li>
+              );
+            })}
           </ul>
         ) : null}
       </div>
@@ -847,7 +986,7 @@ export function MobileChartPage() {
     <span>{chartCandleCount} candles</span><span className="mc-bs-sep">·</span>
     <span className={"mc-footer-state mc-footer-state-"+liveBadgeTone}>{liveStateText}</span>
     <span className="mc-bs-sep">·</span>
-    <span className={"mc-footer-provider mc-footer-provider-"+providerStatus}>{providerStatus==='moex'?'MOEX':providerStatus==='bcs'?'BCS':'BCS→MOEX'}</span>
+    <span className={"mc-footer-provider mc-footer-provider-"+providerStatus}>{providerStatusLabel}</span>
   </div>
   <div className="mc-bottom-tabs" role="tablist">
     {(["info","ai","depth"] as const).map(tab=>(
@@ -882,6 +1021,7 @@ export function MobileChartPage() {
           <div className="mc-diagnostics">
             <span>{source.engine}/{source.market}/{source.board}/{source.ticker}</span>
             <span>Provider: {providerId.toUpperCase()}</span>
+            <span>Effective: {effectiveProviderId.toUpperCase()}</span>
             <span>MOEX: {MOEX_INTERVAL_LABEL[timeframe]}</span>
             <span>Count: {chartCandleCount}</span>
             <span>First: {firstCandle?.begin??"--"}</span>
@@ -903,7 +1043,7 @@ export function MobileChartPage() {
       <AiSignalPanel mode={aiPanelMode} onModeChange={setAiPanelMode} mockSignal={aiSignal} paSignal={paSignal}/>
     )}
     {activeTab==="depth"&&(
-      <OrderBookPanel ticker={source.ticker} classCode={source.board}
+      <OrderBookPanel ticker={source.ticker} classCode={source.classCode ?? source.board}
         active={activeTab==="depth"&&!drawerOpen&&!settingsOpen}/>
     )}
   </div>

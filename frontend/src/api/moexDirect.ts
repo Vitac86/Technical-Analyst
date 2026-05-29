@@ -16,6 +16,11 @@ export type MoexSource = {
   engine: string;
   market: string;
   board: string;
+  sourceProvider?: 'moex' | 'bcs';
+  assetGroup?: 'goods' | 'stock' | 'fx' | 'unknown';
+  classCode?: string;
+  instrumentType?: string;
+  tradingCurrency?: string;
 };
 
 export type MoexSearchResult = {
@@ -25,6 +30,12 @@ export type MoexSearchResult = {
   engine: string;
   market: string;
   board: string;
+  sourceProvider?: 'moex' | 'bcs';
+  assetGroup?: 'goods' | 'stock' | 'fx' | 'unknown';
+  classCode?: string;
+  displayName?: string;
+  instrumentType?: string;
+  tradingCurrency?: string;
 };
 
 // Candle as returned by MOEX (begin is "YYYY-MM-DD HH:MM:SS", Moscow time).
