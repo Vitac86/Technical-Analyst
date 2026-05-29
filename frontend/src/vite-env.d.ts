@@ -7,6 +7,11 @@ interface ImportMetaEnv {
    * Settings. Never written to localStorage, IndexedDB, or any log.
    */
   readonly VITE_DEFAULT_BCS_REFRESH_TOKEN?: string;
+  /**
+   * Optional OAuth client id for the bundled BCS refresh token.
+   * Defaults to trade-api-read when omitted or invalid.
+   */
+  readonly VITE_DEFAULT_BCS_CLIENT_ID?: string;
 }
 
 interface ImportMeta {

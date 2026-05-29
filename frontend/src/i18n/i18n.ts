@@ -157,6 +157,10 @@ const STRINGS: Record<Lang, Dict> = {
     "ai.model": "Модель",
     "ai.candles": "свечей",
     "ai.disclaimer": "Экспериментальный локальный сигнал. Не является инвест. советом.",
+    "settings.data.token.client.label": "Клиент",
+    "settings.data.token.client.auto": "auto",
+    "settings.data.token.client.read": "trade-api-read",
+    "settings.data.token.client.write": "trade-api-write",
   },
   en: {
     // Drawer
@@ -191,7 +195,11 @@ const STRINGS: Record<Lang, Dict> = {
     "settings.data.token.source.session": "custom session token",
     "settings.data.token.source.default": "app default token",
     "settings.data.token.source.none": "none",
-    "settings.data.token.default.available": "Default BCS read-only token is available in this build.",
+    "settings.data.token.client.label": "Client",
+    "settings.data.token.client.auto": "auto",
+    "settings.data.token.client.read": "trade-api-read",
+    "settings.data.token.client.write": "trade-api-write",
+    "settings.data.token.default.available": "Default BCS token available in this build.",
     "settings.data.token.note.session": "Token is held in session memory only — it is lost when the app restarts. BCS support is experimental.",
     "settings.data.token.note.moex": "MOEX direct data. No authentication required.",
     "settings.data.token.warn": "Use a read-only BCS token only. Never use a token with trading permissions.",

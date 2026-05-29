@@ -5,8 +5,9 @@ import {
   hasSessionOverride,
   hasDefaultToken,
   getTokenSource,
+  getBcsClientIdHint,
 } from "../../security/tokenStorage";
-import type { TokenSource } from "../../security/tokenStorage";
+import type { BcsClientId, TokenSource } from "../../security/tokenStorage";
 import { testBcsConnection } from "../../api/bcsAuth";
 import type { BcsTestResult } from "../../api/bcsAuth";
 import { checkForAppUpdate, CURRENT_APP_VERSION_NAME } from "../../api/appUpdate";
@@ -76,6 +77,12 @@ function tokenSourceLabel(t: (k: string) => string, src: TokenSource): string {
   return t("settings.data.token.source.none");
 }
 
+function tokenClientLabel(t: (k: string) => string, clientId: BcsClientId | null): string {
+  if (clientId === "trade-api-read") return t("settings.data.token.client.read");
+  if (clientId === "trade-api-write") return t("settings.data.token.client.write");
+  return t("settings.data.token.client.auto");
+}
+
 // ---------------------------------------------------------------------------
 // Tab: Data
 // ---------------------------------------------------------------------------
@@ -93,12 +100,14 @@ function DataTab({
   const [tokenInput, setTokenInput] = useState("");
   const [sessionSaved, setSessionSaved] = useState(false);
   const [tokenSrc, setTokenSrc] = useState<TokenSource>(getTokenSource());
+  const [clientIdHint, setClientIdHint] = useState<BcsClientId | null>(getBcsClientIdHint());
   const [testState, setTestState] = useState<BcsTestState>({ phase: "idle" });
   const defaultAvailable = hasDefaultToken();
 
   function refreshTokenStatus() {
     setSessionSaved(hasSessionOverride());
     setTokenSrc(getTokenSource());
+    setClientIdHint(getBcsClientIdHint());
   }
 
   useEffect(() => {
@@ -126,6 +135,7 @@ function DataTab({
   async function handleTest() {
     setTestState({ phase: "testing" });
     const result = await testBcsConnection();
+    refreshTokenStatus();
     setTestState({ phase: "done", result });
   }
 
@@ -176,6 +186,15 @@ function DataTab({
               </span>
               <span className={`mc-sm-token-source-badge mc-sm-token-source-${tokenSrc}`}>
                 {tokenSourceLabel(t, tokenSrc)}
+              </span>
+            </div>
+
+            <div className="mc-sm-token-source-row">
+              <span className="mc-sm-token-source-label">
+                {t("settings.data.token.client.label")}:
+              </span>
+              <span className={`mc-sm-token-source-badge mc-sm-token-client-${clientIdHint ?? "auto"}`}>
+                {tokenClientLabel(t, clientIdHint)}
               </span>
             </div>
 

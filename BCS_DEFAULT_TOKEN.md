@@ -25,6 +25,14 @@ At runtime, the app picks a BCS refresh token using this order:
 - `Token source: app default token`
 - `Token source: none`
 
+It also shows the OAuth client safely:
+
+- `Client: trade-api-read`
+- `Client: trade-api-write`
+- `Client: auto` when a pasted token does not expose a usable JWT `azp`
+
+The token value itself is never shown.
+
 ## How to embed a token into a private build
 
 1. Create `frontend/.env.local` (already gitignored via `frontend/.gitignore`).
@@ -32,16 +40,21 @@ At runtime, the app picks a BCS refresh token using this order:
 
    ```env
    VITE_DEFAULT_BCS_REFRESH_TOKEN=<your_read_only_refresh_token>
+   VITE_DEFAULT_BCS_CLIENT_ID=trade-api-read
    ```
 
-3. Rebuild and assemble the APK:
+   `VITE_DEFAULT_BCS_CLIENT_ID` is optional; if omitted, the app defaults the
+   bundled token to `trade-api-read`.
+
+3. Rebuild and assemble the APK. Vite embeds `.env.local` values at build time,
+   so rebuilding is required after every token/client change:
 
    ```bat
    cd frontend
    npm.cmd run build
    npm.cmd run android:sync
    cd android
-   gradlew.bat assembleDebug
+   .\gradlew.bat assembleDebug
    ```
 
    The APK at `frontend/android/app/build/outputs/apk/debug/app-debug.apk`

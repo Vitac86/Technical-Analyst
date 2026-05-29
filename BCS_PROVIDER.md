@@ -26,6 +26,38 @@ Experimental support for loading historical candles from BCS Broker API.
 
 ---
 
+## Optional default token for private APK builds
+
+A private build can include a read-only BCS refresh token so the app works
+without a manual paste after install. Create `frontend/.env.local`:
+
+```env
+VITE_DEFAULT_BCS_REFRESH_TOKEN=<your_read_only_refresh_token>
+VITE_DEFAULT_BCS_CLIENT_ID=trade-api-read
+```
+
+`VITE_DEFAULT_BCS_CLIENT_ID` is optional. When it is missing or invalid, the app
+defaults the bundled token to `trade-api-read` unless the token payload clearly
+identifies `azp=trade-api-write`.
+
+Vite embeds these values into the JavaScript bundle at build time. After
+changing `.env.local`, rebuild the APK:
+
+```powershell
+cd frontend
+npm.cmd run build
+npm.cmd run android:sync
+cd android
+.\gradlew.bat assembleDebug
+```
+
+`frontend/.env.local` is already gitignored, so the token is not committed.
+However, any APK that contains a default token can still be reverse engineered.
+Only distribute such APKs privately and rotate the BCS token immediately if an
+APK or token is exposed.
+
+---
+
 ## Token lifecycle
 
 | Token type    | Typical lifetime | Storage |
@@ -33,7 +65,10 @@ Experimental support for loading historical candles from BCS Broker API.
 | Refresh token | ~90 days        | Session memory only (lost on app restart) |
 | Access token  | ~24 hours       | Session memory only, auto-refreshed |
 
-Because tokens are stored in session memory only (not localStorage, not IndexedDB), **you must re-enter the refresh token after every app restart or page reload**.
+User-pasted tokens are stored in session memory only (not localStorage, not
+IndexedDB), so they are lost after every app restart or page reload. A private
+build-time default token, if configured, remains available because Vite embeds
+it into the built bundle.
 
 ---
 
@@ -57,18 +92,36 @@ Because tokens are stored in session memory only (not localStorage, not IndexedD
 POST /trade-api-keycloak/realms/tradeapi/protocol/openid-connect/token
 Content-Type: application/x-www-form-urlencoded
 Accept: application/json
+```
 
+Read-only token body:
+
+```text
+client_id=trade-api-read
+grant_type=refresh_token
+refresh_token=<token>
+```
+
+Write-capable token body:
+
+```text
 client_id=trade-api-write
 grant_type=refresh_token
 refresh_token=<token>
 ```
 
-- `client_id` must be `trade-api-write` (not `mobile_app`, not `tradeapi`)
+- Read-only refresh tokens use `client_id=trade-api-read`
+- Write-capable refresh tokens use `client_id=trade-api-write`
+- The app infers the client from the refresh-token JWT payload `azp` when
+  possible. If it cannot infer, it starts with `trade-api-read` and can retry
+  once with `trade-api-write`; inferred/configured clients retry only when the
+  auth error looks client-related.
 - Body must be `application/x-www-form-urlencoded` (URLSearchParams), never JSON
 - Successful response fields: `access_token`, `expires_in`, `refresh_expires_in`, `refresh_token`
 - If the response includes a rotated `refresh_token`, it is stored in session memory
-- A 400 with `error=invalid_grant` means the refresh token is expired; the app shows:
-  _"BCS refresh token is invalid or expired. Paste a new token."_
+- A 400 with `error=invalid_grant` usually means the refresh token is expired
+  or was exchanged with the wrong BCS client id; the app retries once with the
+  alternate client id when the error looks client-related.
 
 ### Historical candles
 
@@ -190,7 +243,9 @@ When fallback is disabled:
 
 A HTTP 400 from BCS means the request parameters are invalid.
 
-- Auth 400 with `error=invalid_grant` → _"BCS refresh token is invalid or expired. Paste a new token."_
+- Auth 400 with `error=invalid_grant` → the token is expired/invalid or was
+  exchanged with the wrong BCS client id. Client mismatch errors get one
+  alternate-client retry.
 - Candles 400 → _"BCS rejected the candle request. Try a smaller range or another timeframe."_
 
 The app parses `type` and `traceId` fields from the 400 response body for internal diagnostics, but never logs or displays them to the user in raw form.
