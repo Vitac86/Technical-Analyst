@@ -7,7 +7,6 @@ export type WatchlistAsset = {
   engine: string;
   market: string;
   board: string;
-  alias?: string;
 };
 
 const LS_KEY = 'technicalAnalyst.mobile.watchlist';
@@ -29,7 +28,17 @@ export function loadWatchlist(): WatchlistAsset[] {
     const raw = localStorage.getItem(LS_KEY);
     if (!raw) return DEFAULT_WATCHLIST;
     const parsed = JSON.parse(raw) as unknown;
-    if (Array.isArray(parsed) && parsed.length > 0) return parsed as WatchlistAsset[];
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      // Strip any legacy `alias` field that older builds may have written.
+      return (parsed as Array<Record<string, unknown>>).map(a => ({
+        id:     String(a.id ?? ''),
+        ticker: String(a.ticker ?? ''),
+        name:   typeof a.name === 'string' ? a.name : undefined,
+        engine: String(a.engine ?? ''),
+        market: String(a.market ?? ''),
+        board:  String(a.board ?? ''),
+      })) as WatchlistAsset[];
+    }
   } catch { /* unavailable */ }
   return DEFAULT_WATCHLIST;
 }

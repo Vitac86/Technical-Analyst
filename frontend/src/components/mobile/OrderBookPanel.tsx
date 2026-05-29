@@ -9,6 +9,7 @@ import {
   type OrderBookSnapshot,
 } from '../../api/bcsOrderBook';
 import { BcsAuthException } from '../../api/bcsAuth';
+import { useTranslation } from '../../i18n/useTranslation';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -42,11 +43,12 @@ function formatTime(iso: string): string {
 }
 
 /** Normalise any thrown value into a user-facing error string. */
-function normaliseError(err: unknown): string {
-  // Auth / token errors — direct user to Settings.
+function normaliseError(err: unknown, t: (k: string) => string): string {
+  // Auth / token errors — surface the localized "BCS token required" message
+  // when no token is available (priority-3 case from the token-source spec).
   if (err instanceof OrderBookException) {
     if (err.kind === 'auth_required') {
-      return 'BCS session expired. Re-authenticate in Settings.';
+      return t('ob.tokenRequired');
     }
     if (err.kind === 'rate_limited') {
       return 'BCS rate limit reached. Retrying…';
@@ -59,7 +61,7 @@ function normaliseError(err: unknown): string {
 
   if (err instanceof BcsAuthException) {
     if (err.kind === 'invalid_token') {
-      return 'BCS token missing or expired. Paste a token in Settings.';
+      return t('ob.tokenRequired');
     }
     if (err.kind === 'network_error') {
       return 'Network error connecting to BCS. Check connection.';
@@ -101,7 +103,10 @@ const POLL_INTERVAL_MS = 2000;
 const DEPTH_OPTIONS: Depth[] = [5, 10, 20];
 
 export function OrderBookPanel({ ticker, classCode, active }: OrderBookPanelProps) {
-  const [depth, setDepth] = useState<Depth>(20);
+  const { t } = useTranslation();
+  // Default to 10 rows: fits without inner scroll on a 360-wide phone and
+  // still gives a useful view of the book.
+  const [depth, setDepth] = useState<Depth>(10);
   const [snapshot, setSnapshot] = useState<OrderBookSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -163,7 +168,7 @@ export function OrderBookPanel({ ticker, classCode, active }: OrderBookPanelProp
         }
       } catch (err) {
         if (!cancelled && isMountedRef.current) {
-          setError(normaliseError(err));
+          setError(normaliseError(err, t));
           setLoading(false);
           // Keep previous snapshot — do not clear it.
         }
@@ -208,7 +213,7 @@ export function OrderBookPanel({ ticker, classCode, active }: OrderBookPanelProp
     <div className="mc-ob-panel">
       {/* Header */}
       <div className="mc-ob-header">
-        <span className="mc-ob-title">Order Book</span>
+        <span className="mc-ob-title">{t('ob.title')}</span>
         <span className="mc-ob-badge">BCS</span>
         {snapshot ? (
           <span className="mc-ob-time">{formatTime(snapshot.receivedAt)}</span>
@@ -216,7 +221,7 @@ export function OrderBookPanel({ ticker, classCode, active }: OrderBookPanelProp
       </div>
 
       {/* Depth selector */}
-      <div className="mc-ob-depth-row" role="group" aria-label="Order book depth">
+      <div className="mc-ob-depth-row" role="group" aria-label={t('ob.depth')}>
         {DEPTH_OPTIONS.map(d => (
           <button
             key={d}
@@ -232,26 +237,26 @@ export function OrderBookPanel({ ticker, classCode, active }: OrderBookPanelProp
 
       {/* Body */}
       {!active || (!ticker || !classCode) ? (
-        <div className="mc-ob-empty">Select an instrument to view order book.</div>
+        <div className="mc-ob-empty">{t('ob.selectInstrument')}</div>
       ) : loading && !snapshot ? (
-        <div className="mc-ob-loading">Loading…</div>
+        <div className="mc-ob-loading">{t('ob.loading')}</div>
       ) : error && !snapshot ? (
         <div className="mc-ob-error" role="alert">{error}</div>
       ) : snapshot ? (
         <>
           {/* Column headers */}
           <div className="mc-ob-cols-header">
-            <span className="mc-ob-col-ask-label">Ask (price / qty)</span>
-            <span className="mc-ob-col-bid-label">Bid (price / qty)</span>
+            <span className="mc-ob-col-ask-label">{t('ob.ask')} (price / qty)</span>
+            <span className="mc-ob-col-bid-label">{t('ob.bid')} (price / qty)</span>
           </div>
 
           {/* Spread row */}
           {spreadRow ? (
             <div className="mc-ob-spread-row">
-              <span className="mc-ob-spread-label">Spread</span>
+              <span className="mc-ob-spread-label">{t('ob.spread')}</span>
               <span className="mc-ob-spread-val">{spreadRow.spread}</span>
               <span className="mc-ob-spread-pct">{spreadRow.spreadPct}</span>
-              <span className="mc-ob-spread-mid">Mid {spreadRow.mid}</span>
+              <span className="mc-ob-spread-mid">{t('ob.mid')} {spreadRow.mid}</span>
             </div>
           ) : null}
 
@@ -296,7 +301,7 @@ export function OrderBookPanel({ ticker, classCode, active }: OrderBookPanelProp
           ) : null}
         </>
       ) : (
-        <div className="mc-ob-empty">No data.</div>
+        <div className="mc-ob-empty">{t('ob.noData')}</div>
       )}
     </div>
   );

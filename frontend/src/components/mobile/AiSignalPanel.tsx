@@ -1,5 +1,6 @@
 import type { AiSignalResult } from '../../ml/types';
 import type { PaShortSignalResult } from '../../ml/paShortSignal';
+import { useTranslation } from '../../i18n/useTranslation';
 
 export type AiPanelMode = 'mock' | 'pa_short';
 
@@ -11,12 +12,13 @@ interface AiSignalPanelProps {
 }
 
 export function AiSignalPanel({ mode, onModeChange, mockSignal, paSignal }: AiSignalPanelProps) {
+  const { t } = useTranslation();
   return (
     <div className="mc-ai-panel">
       {/* Header row with model toggle */}
       <div className="mc-ai-header">
         <span className="mc-ai-title">
-          {mode === 'pa_short' ? 'Experimental AI' : 'AI Signal'}
+          {mode === 'pa_short' ? t('ai.experimental') : t('ai.signal')}
         </span>
         <div className="mc-ai-mode-toggle" role="group" aria-label="AI model selector">
           <button
@@ -24,7 +26,7 @@ export function AiSignalPanel({ mode, onModeChange, mockSignal, paSignal }: AiSi
             className={`mc-ai-mode-btn${mode === 'mock' ? ' mc-ai-mode-btn-active' : ''}`}
             onClick={() => onModeChange('mock')}
           >
-            Mock
+            {t('settings.ai.mode.mock')}
           </button>
           <button
             type="button"
@@ -48,15 +50,16 @@ export function AiSignalPanel({ mode, onModeChange, mockSignal, paSignal }: AiSi
 // ── Mock signal sub-panel (original behaviour) ────────────────────────────────
 
 function MockPanel({ signal }: { signal: AiSignalResult | null }) {
+  const { t } = useTranslation();
   if (!signal) {
-    return <div className="mc-ai-unavailable">Calculating…</div>;
+    return <div className="mc-ai-unavailable">{t('ai.calculating')}</div>;
   }
 
   if (!signal.available) {
     return (
       <>
         <div className="mc-ai-unavailable">{signal.reason ?? 'Signal unavailable'}</div>
-        <div className="mc-ai-disclaimer">Experimental local signal. Not financial advice.</div>
+        <div className="mc-ai-disclaimer">{t('ai.disclaimer')}</div>
       </>
     );
   }
@@ -65,11 +68,16 @@ function MockPanel({ signal }: { signal: AiSignalResult | null }) {
     signal.direction === 'LONG'  ? 'mc-ai-dir-long'  :
     signal.direction === 'SHORT' ? 'mc-ai-dir-short'  :
                                    'mc-ai-dir-notrade';
-  const dirLabel = signal.direction === 'NO_TRADE' ? 'NO TRADE' : signal.direction;
+  const dirLabel = signal.direction === 'NO_TRADE' ? t('ai.notrade') : signal.direction;
 
   const upPct   = Math.round(signal.probabilities.up   * 100);
   const downPct = Math.round(signal.probabilities.down * 100);
   const flatPct = Math.round(signal.probabilities.flat * 100);
+
+  const confLabel =
+    signal.confidence === 'high'   ? t('ai.confidence.high') :
+    signal.confidence === 'medium' ? t('ai.confidence.medium') :
+                                     t('ai.confidence.low');
 
   return (
     <>
@@ -77,7 +85,7 @@ function MockPanel({ signal }: { signal: AiSignalResult | null }) {
         <div className="mc-ai-row">
           <span className={`mc-ai-direction ${dirClass}`}>{dirLabel}</span>
           <span className={`mc-ai-confidence mc-ai-conf-${signal.confidence}`}>
-            {signal.confidence.charAt(0).toUpperCase() + signal.confidence.slice(1)} confidence
+            {confLabel}
           </span>
         </div>
         <div className="mc-ai-probs">
@@ -86,11 +94,11 @@ function MockPanel({ signal }: { signal: AiSignalResult | null }) {
           <span className="mc-ai-prob-flat">FL {flatPct}%</span>
         </div>
         <div className="mc-ai-meta">
-          <span>Horizon: {signal.horizonCandles} candles</span>
-          <span>Model: {signal.modelVersion}</span>
+          <span>{t('ai.horizon')}: {signal.horizonCandles} {t('ai.candles')}</span>
+          <span>{t('ai.model')}: {signal.modelVersion}</span>
         </div>
       </div>
-      <div className="mc-ai-disclaimer">Experimental local signal. Not financial advice.</div>
+      <div className="mc-ai-disclaimer">{t('ai.disclaimer')}</div>
     </>
   );
 }
@@ -105,8 +113,9 @@ const RISK_CHIP_CLASS: Record<string, string> = {
 };
 
 function PaShortPanel({ signal }: { signal: PaShortSignalResult | null }) {
+  const { t } = useTranslation();
   if (!signal) {
-    return <div className="mc-ai-unavailable">Calculating…</div>;
+    return <div className="mc-ai-unavailable">{t('ai.calculating')}</div>;
   }
 
   if (!signal.available) {
@@ -114,7 +123,7 @@ function PaShortPanel({ signal }: { signal: PaShortSignalResult | null }) {
       <>
         <div className="mc-ai-unavailable mc-pa-unavailable">{signal.message}</div>
         <div className="mc-ai-disclaimer mc-pa-disclaimer">
-          Research only. Backtest has not shown positive net expectancy.
+          {t('ai.research.warning')}
         </div>
       </>
     );
@@ -130,11 +139,11 @@ function PaShortPanel({ signal }: { signal: PaShortSignalResult | null }) {
     <>
       <div className="mc-pa-body">
         {/* Subtitle */}
-        <div className="mc-pa-subtitle">PA SHORT risk</div>
+        <div className="mc-pa-subtitle">{t('ai.short.risk')}</div>
 
         {/* Probability + risk chip */}
         <div className="mc-pa-row">
-          <span className="mc-pa-prob">SHORT risk: {probPct}</span>
+          <span className="mc-pa-prob">{t('ai.short.risk')}: {probPct}</span>
           <span className={`mc-pa-risk-chip ${chipClass}`}>
             {signal.riskLevel.toUpperCase()}
           </span>
@@ -142,15 +151,15 @@ function PaShortPanel({ signal }: { signal: PaShortSignalResult | null }) {
 
         {/* Meta */}
         <div className="mc-pa-meta">
-          <span>Model: {signal.modelId}</span>
-          <span>Horizon: 12 candles</span>
+          <span>{t('ai.model')}: {signal.modelId}</span>
+          <span>{t('ai.horizon')}: 12 {t('ai.candles')}</span>
           <span>TP 0.4% / SL 0.25%</span>
         </div>
       </div>
 
       {/* Research warning — always visible */}
       <div className="mc-ai-disclaimer mc-pa-disclaimer">
-        Research only. Backtest has not shown positive net expectancy.
+        {t('ai.research.warning')}
       </div>
     </>
   );

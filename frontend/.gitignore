@@ -1,0 +1,3 @@
+# Frontend env files — never commit local tokens or secrets.
+.env.local
+.env.*.local

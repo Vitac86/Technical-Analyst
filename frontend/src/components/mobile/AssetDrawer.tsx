@@ -4,6 +4,7 @@ import type { MoexQuote, MoexSearchResult } from '../../api/moexDirect';
 import { makeAssetId } from '../../utils/mobileWatchlist';
 import type { WatchlistAsset } from '../../utils/mobileWatchlist';
 import { CURRENT_APP_VERSION_NAME } from '../../api/appUpdate';
+import { useTranslation } from '../../i18n/useTranslation';
 
 type DrawerQuoteState = {
   quote: MoexQuote | null;
@@ -43,30 +44,37 @@ function quoteTone(changePercent: number): string {
 }
 
 export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, onWatchlistChange, onSettingsOpen }: Props) {
+  const { t } = useTranslation();
   const [editMode,       setEditMode]       = useState(false);
   const [showSearch,     setShowSearch]     = useState(false);
   const [searchQuery,    setSearchQuery]    = useState('');
   const [searchResults,  setSearchResults]  = useState<MoexSearchResult[]>([]);
   const [searchLoading,  setSearchLoading]  = useState(false);
   const [dupMsg,         setDupMsg]         = useState(false);
-  const [aliasId,        setAliasId]        = useState<string | null>(null);
-  const [aliasValue,     setAliasValue]     = useState('');
   const [quotes,         setQuotes]         = useState<Record<string, DrawerQuoteState>>({});
+
+  // Drag-reorder state — pointer-based, works in Android WebView where native
+  // HTML5 drag-and-drop is unreliable.
+  const [dragId,        setDragId]        = useState<string | null>(null);
+  const [dragOverId,    setDragOverId]    = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const quoteInFlightRef = useRef(false);
 
   // Reset local UI state after drawer closes (after slide-out animation)
   useEffect(() => {
     if (!open) {
-      const t = setTimeout(() => {
+      const tmr = setTimeout(() => {
         setEditMode(false);
         setShowSearch(false);
         setSearchQuery('');
         setSearchResults([]);
-        setAliasId(null);
         setDupMsg(false);
+        setDragId(null);
+        setDragOverId(null);
       }, 280);
-      return () => clearTimeout(t);
+      return () => clearTimeout(tmr);
     }
   }, [open]);
 
@@ -168,25 +176,62 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
     if (id === selectedId && newList.length > 0) onSelect(newList[0]);
   }
 
-  function swap(idx: number, dir: -1 | 1) {
-    const j = idx + dir;
-    if (j < 0 || j >= watchlist.length) return;
+  // ── Pointer-based drag reorder ─────────────────────────────────────────────
+
+  function handleDragHandlePointerDown(id: string) {
+    setDragId(id);
+    setDragOverId(id);
+  }
+
+  function handleRowPointerEnter(id: string) {
+    if (!dragId) return;
+    if (id !== dragOverId) setDragOverId(id);
+  }
+
+  function commitReorder() {
+    if (!dragId || !dragOverId || dragId === dragOverId) {
+      setDragId(null);
+      setDragOverId(null);
+      return;
+    }
+    const fromIdx = watchlist.findIndex(a => a.id === dragId);
+    const toIdx = watchlist.findIndex(a => a.id === dragOverId);
+    if (fromIdx === -1 || toIdx === -1) {
+      setDragId(null);
+      setDragOverId(null);
+      return;
+    }
     const next = [...watchlist];
-    [next[idx], next[j]] = [next[j], next[idx]];
+    const [moved] = next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, moved);
     onWatchlistChange(next);
+    setDragId(null);
+    setDragOverId(null);
   }
 
-  function startAlias(asset: WatchlistAsset) {
-    setAliasId(asset.id);
-    setAliasValue(asset.alias ?? asset.ticker);
-  }
-
-  function commitAlias(id: string) {
-    onWatchlistChange(
-      watchlist.map(a => a.id === id ? { ...a, alias: aliasValue.trim() || undefined } : a),
-    );
-    setAliasId(null);
-  }
+  // Global pointer-move/up so dragging continues even when the finger leaves
+  // a row (rows are tracked via per-row pointerenter).
+  useEffect(() => {
+    if (!dragId) return;
+    function onMove(e: PointerEvent) {
+      // Walk the element under the pointer and find the closest row id.
+      const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+      if (!el) return;
+      const row = el.closest('[data-row-id]') as HTMLElement | null;
+      const rid = row?.getAttribute('data-row-id') ?? null;
+      if (rid && rid !== dragOverId) setDragOverId(rid);
+    }
+    function onUp() { commitReorder(); }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragId, dragOverId, watchlist]);
 
   return (
     <>
@@ -201,12 +246,12 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
       <div
         className={`mc-drawer${open ? ' mc-drawer-open' : ''}`}
         role="dialog"
-        aria-label="Asset list"
+        aria-label={t('drawer.assets')}
       >
         {/* ── Drawer header ──────────────────────────────────────────── */}
         <div className="mc-drawer-header">
           <div>
-            <div className="mc-drawer-title">Assets</div>
+            <div className="mc-drawer-title">{t('drawer.assets')}</div>
             <div className="mc-drawer-subtitle">
               Technical Analyst · v{CURRENT_APP_VERSION_NAME}
             </div>
@@ -214,7 +259,7 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
           <div className="mc-drawer-header-btns">
             {editMode ? (
               <button type="button" className="mc-dh-btn mc-dh-done" onClick={() => setEditMode(false)}>
-                Done
+                {t('drawer.done')}
               </button>
             ) : (
               <>
@@ -223,14 +268,14 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
                   className="mc-dh-btn"
                   onClick={() => setShowSearch(s => !s)}
                 >
-                  {showSearch ? 'Cancel' : '+ Add'}
+                  {showSearch ? t('drawer.cancel') : t('drawer.add')}
                 </button>
                 <button
                   type="button"
                   className="mc-dh-btn"
                   onClick={() => { setEditMode(true); setShowSearch(false); }}
                 >
-                  Manage
+                  {t('drawer.manage')}
                 </button>
               </>
             )}
@@ -253,7 +298,7 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
                 type="search"
                 inputMode="text"
                 className="mc-drawer-search-input"
-                placeholder="Search MOEX…"
+                placeholder={t('drawer.search.placeholder')}
                 value={searchQuery}
                 autoComplete="off"
                 autoCorrect="off"
@@ -263,7 +308,7 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
               />
               {searchLoading && <span className="mc-drawer-search-spin">…</span>}
             </div>
-            {dupMsg && <div className="mc-drawer-dup-msg">Already in watchlist</div>}
+            {dupMsg && <div className="mc-drawer-dup-msg">{t('drawer.duplicate')}</div>}
             {searchResults.length > 0 && (
               <ul className="mc-drawer-search-list">
                 {searchResults.map(r => {
@@ -278,7 +323,7 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
                       <span className="mc-dsr-ticker">{r.ticker}</span>
                       <span className="mc-dsr-name">{r.name}</span>
                       <span className="mc-dsr-meta">{r.board}</span>
-                      {isAdded && <span className="mc-dsr-added">Added</span>}
+                      {isAdded && <span className="mc-dsr-added">{t('drawer.added')}</span>}
                     </li>
                   );
                 })}
@@ -288,127 +333,118 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
         )}
 
         {/* ── Asset list ─────────────────────────────────────────────── */}
-        <div className="mc-drawer-list">
+        <div className="mc-drawer-list" ref={listRef}>
           {watchlist.length === 0 ? (
             <div className="mc-drawer-empty">
-              <p className="mc-drawer-empty-title">No assets yet</p>
-              <p className="mc-drawer-empty-sub">Add your first instrument to the watchlist</p>
+              <p className="mc-drawer-empty-title">{t('drawer.empty.title')}</p>
+              <p className="mc-drawer-empty-sub">{t('drawer.empty.sub')}</p>
               <button type="button" className="mc-dh-btn" onClick={() => setShowSearch(true)}>
-                + Add asset
+                {t('drawer.add.asset')}
               </button>
             </div>
           ) : (
-            watchlist.map((asset, idx) => {
-              const active = asset.id === selectedId;
-              const quoteState = quotes[asset.id];
-              const quote = quoteState?.quote ?? null;
-              const changePercent = quote?.changePercent ?? null;
-              return (
-                <div
-                  key={asset.id}
-                  className={
-                    `mc-drawer-item` +
-                    (active    ? ' mc-drawer-item-sel'  : '') +
-                    (editMode  ? ' mc-drawer-item-edit' : '')
-                  }
-                  onClick={editMode ? undefined : () => { onSelect(asset); onClose(); }}
-                >
-                  {/* Asset info */}
-                  <div className="mc-drawer-item-body">
-                    {aliasId === asset.id ? (
-                      <input
-                        type="text"
-                        className="mc-drawer-alias-input"
-                        value={aliasValue}
-                        autoFocus
-                        onChange={e => setAliasValue(e.target.value)}
-                        onBlur={() => commitAlias(asset.id)}
-                        onKeyDown={e => { if (e.key === 'Enter') commitAlias(asset.id); }}
-                        onClick={e => e.stopPropagation()}
-                      />
-                    ) : (
-                      <span className="mc-drawer-item-ticker">
-                        {asset.alias ?? asset.ticker}
-                      </span>
-                    )}
-                    {asset.name && aliasId !== asset.id && (
-                      <span className="mc-drawer-item-name">{asset.name}</span>
-                    )}
-                    <span className="mc-drawer-item-meta">
-                      {asset.market === 'selt'
-                        ? `FX · ${asset.board}`
-                        : asset.market === 'forts'
-                          ? `FORTS · ${asset.board}`
-                          : asset.board}
-                    </span>
-                  </div>
-
-                  {!editMode && (
-                    <div
-                      className="mc-drawer-quote"
-                      title={quote?.updatedAt ? `Quote ${quote.updatedAt}` : undefined}
-                    >
-                      {quote?.price != null ? (
-                        <span className="mc-drawer-quote-price">
-                          {formatQuotePrice(quote.price)}
-                        </span>
-                      ) : (
-                        <span className="mc-drawer-quote-dash">--</span>
-                      )}
-                      {changePercent != null ? (
-                        <span className={`mc-drawer-quote-change mc-drawer-quote-change-${quoteTone(changePercent)}`}>
-                          {formatQuoteChange(changePercent)}
-                        </span>
-                      ) : quoteState?.error ? (
-                        <span className="mc-drawer-quote-error">!</span>
-                      ) : null}
-                    </div>
-                  )}
-
-                  {/* Edit controls */}
-                  {editMode && (
-                    <div className="mc-drawer-edit-row" onClick={e => e.stopPropagation()}>
-                      <button
-                        type="button"
-                        className="mc-edit-btn mc-edit-alias"
-                        title="Rename"
-                        onClick={() => startAlias(asset)}
+            <>
+              {editMode && (
+                <div className="mc-drawer-drag-hint">{t('drawer.drag.hint')}</div>
+              )}
+              {watchlist.map((asset) => {
+                const active = asset.id === selectedId;
+                const quoteState = quotes[asset.id];
+                const quote = quoteState?.quote ?? null;
+                const changePercent = quote?.changePercent ?? null;
+                const isDragging = dragId === asset.id;
+                const isDragOver = !!dragId && dragOverId === asset.id && dragId !== asset.id;
+                return (
+                  <div
+                    key={asset.id}
+                    data-row-id={asset.id}
+                    className={
+                      `mc-drawer-item` +
+                      (active     ? ' mc-drawer-item-sel'     : '') +
+                      (editMode   ? ' mc-drawer-item-edit'    : '') +
+                      (isDragging ? ' mc-drawer-item-dragging' : '') +
+                      (isDragOver ? ' mc-drawer-item-dragover' : '')
+                    }
+                    onPointerEnter={() => handleRowPointerEnter(asset.id)}
+                    onClick={
+                      editMode
+                        ? undefined
+                        : () => { onSelect(asset); onClose(); }
+                    }
+                  >
+                    {editMode && (
+                      <div
+                        className="mc-drag-handle"
+                        role="button"
+                        aria-label={t('drawer.drag.hint')}
+                        onPointerDown={(e) => {
+                          e.stopPropagation();
+                          handleDragHandlePointerDown(asset.id);
+                        }}
                       >
-                        Aa
-                      </button>
-                      <div className="mc-edit-order-btns">
+                        <span />
+                        <span />
+                        <span />
+                      </div>
+                    )}
+
+                    {/* Asset info — display name comes from instrument metadata only */}
+                    <div className="mc-drawer-item-body">
+                      <span className="mc-drawer-item-ticker">
+                        {asset.ticker}
+                      </span>
+                      {asset.name && (
+                        <span className="mc-drawer-item-name">{asset.name}</span>
+                      )}
+                      <span className="mc-drawer-item-meta">
+                        {asset.market === 'selt'
+                          ? `FX · ${asset.board}`
+                          : asset.market === 'forts'
+                            ? `FORTS · ${asset.board}`
+                            : asset.board}
+                      </span>
+                    </div>
+
+                    {!editMode && (
+                      <div
+                        className="mc-drawer-quote"
+                        title={quote?.updatedAt ? `Quote ${quote.updatedAt}` : undefined}
+                      >
+                        {quote?.price != null ? (
+                          <span className="mc-drawer-quote-price">
+                            {formatQuotePrice(quote.price)}
+                          </span>
+                        ) : (
+                          <span className="mc-drawer-quote-dash">--</span>
+                        )}
+                        {changePercent != null ? (
+                          <span className={`mc-drawer-quote-change mc-drawer-quote-change-${quoteTone(changePercent)}`}>
+                            {formatQuoteChange(changePercent)}
+                          </span>
+                        ) : quoteState?.error ? (
+                          <span className="mc-drawer-quote-error">!</span>
+                        ) : null}
+                      </div>
+                    )}
+
+                    {/* Edit controls — only remove, no rename, no up/down */}
+                    {editMode && (
+                      <div className="mc-drawer-edit-row" onClick={e => e.stopPropagation()}>
                         <button
                           type="button"
-                          className="mc-edit-btn mc-edit-up"
-                          disabled={idx === 0}
-                          title="Move up"
-                          onClick={() => swap(idx, -1)}
+                          className="mc-edit-btn mc-edit-del"
+                          title={t('drawer.remove')}
+                          aria-label={t('drawer.remove')}
+                          onClick={() => handleDelete(asset.id)}
                         >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          className="mc-edit-btn mc-edit-dn"
-                          disabled={idx === watchlist.length - 1}
-                          title="Move down"
-                          onClick={() => swap(idx, 1)}
-                        >
-                          ↓
+                          ×
                         </button>
                       </div>
-                      <button
-                        type="button"
-                        className="mc-edit-btn mc-edit-del"
-                        title="Delete"
-                        onClick={() => handleDelete(asset.id)}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })
+                    )}
+                  </div>
+                );
+              })}
+            </>
           )}
         </div>
 
@@ -416,7 +452,7 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
         <div className="mc-drawer-footer">
           <span className="mc-drawer-footer-version">v{CURRENT_APP_VERSION_NAME}</span>
           {onSettingsOpen&&(<button type="button" className="mc-drawer-settings-btn"
-            onClick={()=>{onClose();onSettingsOpen();}} aria-label="Open settings">Settings</button>)}
+            onClick={()=>{onClose();onSettingsOpen();}} aria-label={t('drawer.settings')}>{t('drawer.settings')}</button>)}
         </div>
       </div>
     </>

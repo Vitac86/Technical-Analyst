@@ -6,19 +6,43 @@
     sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 * {
   box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+  width: 100%;
+  min-height: 100%;
+  overflow-x: hidden;
+}
+
+html,
 body {
   margin: 0;
+  /* Prevent accidental double-tap-to-zoom on app surfaces. */
+  touch-action: manipulation;
+}
+
+body {
   min-width: 320px;
   min-height: 100vh;
   background:
     linear-gradient(180deg, #171b20 0%, #0f1115 320px),
     #0f1115;
+}
+
+/* Keep inputs >= 16px so iOS / Android WebView do not zoom on focus. */
+input,
+select,
+textarea,
+button {
+  font-size: 16px;
 }
 
 a {

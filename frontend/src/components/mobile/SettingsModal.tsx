@@ -1,9 +1,19 @@
 import { useState, useEffect } from "react";
-import { storeRefreshToken, clearTokens, hasRefreshToken } from "../../security/tokenStorage";
+import {
+  storeRefreshToken,
+  clearTokens,
+  hasSessionOverride,
+  hasDefaultToken,
+  getTokenSource,
+} from "../../security/tokenStorage";
+import type { TokenSource } from "../../security/tokenStorage";
 import { testBcsConnection } from "../../api/bcsAuth";
 import type { BcsTestResult } from "../../api/bcsAuth";
 import { checkForAppUpdate, CURRENT_APP_VERSION_NAME } from "../../api/appUpdate";
 import type { AppUpdateManifest } from "../../api/appUpdate";
+import { useTranslation } from "../../i18n/useTranslation";
+import { setLanguage } from "../../i18n/i18n";
+import type { Lang } from "../../i18n/i18n";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -45,18 +55,25 @@ type UpdateCheckState =
 // ---------------------------------------------------------------------------
 
 function LiveStatusChip({ status }: { status: SettingsModalProps["liveStatus"] }) {
-  const labels: Record<SettingsModalProps["liveStatus"], string> = {
-    live: "Live",
-    paused: "Paused",
-    stale: "Stale",
-    reconnecting: "Reconnecting…",
-    error: "Error",
+  const { t } = useTranslation();
+  const labelKey: Record<SettingsModalProps["liveStatus"], string> = {
+    live: "settings.live.status.live",
+    paused: "settings.live.status.paused",
+    stale: "settings.live.status.stale",
+    reconnecting: "settings.live.status.reconnecting",
+    error: "settings.live.status.error",
   };
   return (
     <span className={`mc-sm-status-chip mc-sm-status-chip-${status}`}>
-      {labels[status]}
+      {t(labelKey[status])}
     </span>
   );
+}
+
+function tokenSourceLabel(t: (k: string) => string, src: TokenSource): string {
+  if (src === "session") return t("settings.data.token.source.session");
+  if (src === "default") return t("settings.data.token.source.default");
+  return t("settings.data.token.source.none");
 }
 
 // ---------------------------------------------------------------------------
@@ -72,12 +89,20 @@ function DataTab({
   SettingsModalProps,
   "providerId" | "onProviderChange" | "fallbackEnabled" | "onFallbackChange"
 >) {
+  const { t } = useTranslation();
   const [tokenInput, setTokenInput] = useState("");
-  const [tokenSaved, setTokenSaved] = useState(false);
+  const [sessionSaved, setSessionSaved] = useState(false);
+  const [tokenSrc, setTokenSrc] = useState<TokenSource>(getTokenSource());
   const [testState, setTestState] = useState<BcsTestState>({ phase: "idle" });
+  const defaultAvailable = hasDefaultToken();
+
+  function refreshTokenStatus() {
+    setSessionSaved(hasSessionOverride());
+    setTokenSrc(getTokenSource());
+  }
 
   useEffect(() => {
-    setTokenSaved(hasRefreshToken());
+    refreshTokenStatus();
     setTokenInput("");
     setTestState({ phase: "idle" });
   }, [providerId]);
@@ -87,14 +112,14 @@ function DataTab({
     if (!trimmed) return;
     storeRefreshToken(trimmed);
     setTokenInput("");
-    setTokenSaved(true);
+    refreshTokenStatus();
     setTestState({ phase: "idle" });
   }
 
   function handleClearToken() {
     clearTokens();
-    setTokenSaved(false);
     setTokenInput("");
+    refreshTokenStatus();
     setTestState({ phase: "idle" });
   }
 
@@ -107,44 +132,59 @@ function DataTab({
   return (
     <div className="mc-sm-tab-content">
       {/* Provider selector */}
-      <div className="mc-sm-section">
-        <div className="mc-sm-section-label">Data Source</div>
-        <div className="mc-sm-choice-row">
+      <section className="mc-sm-card">
+        <div className="mc-sm-card-label">{t("settings.data.source")}</div>
+        <div className="mc-sm-segmented">
           <button
             type="button"
-            className={`mc-sm-choice-btn${providerId === "moex" ? " mc-sm-choice-btn-active" : ""}`}
+            className={`mc-sm-seg-btn${providerId === "moex" ? " mc-sm-seg-btn-active" : ""}`}
             onClick={() => onProviderChange("moex")}
           >
             MOEX
           </button>
           <button
             type="button"
-            className={`mc-sm-choice-btn${providerId === "bcs" ? " mc-sm-choice-btn-active" : ""}`}
+            className={`mc-sm-seg-btn${providerId === "bcs" ? " mc-sm-seg-btn-active" : ""}`}
             onClick={() => onProviderChange("bcs")}
           >
             BCS
           </button>
         </div>
-      </div>
+      </section>
 
       {/* BCS-only section */}
       {providerId === "bcs" && (
         <>
-          <div className="mc-sm-warn">
-            Use a read-only BCS token only. Never use a token with trading permissions.
-          </div>
+          {defaultAvailable && (
+            <section className="mc-sm-card mc-sm-info-card">
+              {t("settings.data.token.default.available")}
+            </section>
+          )}
 
-          <div className="mc-sm-section">
-            <div className="mc-sm-section-label">
-              {tokenSaved ? "Token status" : "Paste BCS refresh token"}
+          <section className="mc-sm-card mc-sm-warn-card">
+            {t("settings.data.token.warn")}
+          </section>
+
+          <section className="mc-sm-card">
+            <div className="mc-sm-card-label">
+              {sessionSaved ? t("settings.data.token.saved") : t("settings.data.token.paste")}
             </div>
 
-            {!tokenSaved ? (
+            <div className="mc-sm-token-source-row">
+              <span className="mc-sm-token-source-label">
+                {t("settings.data.token.source.label")}:
+              </span>
+              <span className={`mc-sm-token-source-badge mc-sm-token-source-${tokenSrc}`}>
+                {tokenSourceLabel(t, tokenSrc)}
+              </span>
+            </div>
+
+            {!sessionSaved ? (
               <div className="mc-sm-token-entry">
                 <input
                   type="password"
                   className="mc-sm-token-input"
-                  placeholder="Paste refresh token here…"
+                  placeholder={t("settings.data.placeholder.token")}
                   value={tokenInput}
                   autoComplete="off"
                   autoCorrect="off"
@@ -157,18 +197,17 @@ function DataTab({
                   disabled={!tokenInput.trim()}
                   onClick={handleSaveToken}
                 >
-                  Save
+                  {t("settings.data.save")}
                 </button>
               </div>
             ) : (
               <div className="mc-sm-token-row">
-                <span className="mc-sm-token-saved-label">BCS token saved</span>
                 <button
                   type="button"
-                  className="mc-sm-btn mc-sm-btn-ghost"
+                  className="mc-sm-btn mc-sm-btn-danger"
                   onClick={handleClearToken}
                 >
-                  Clear
+                  {t("settings.data.clear")}
                 </button>
                 <button
                   type="button"
@@ -176,7 +215,24 @@ function DataTab({
                   disabled={testState.phase === "testing"}
                   onClick={() => { void handleTest(); }}
                 >
-                  {testState.phase === "testing" ? "Testing…" : "Test"}
+                  {testState.phase === "testing"
+                    ? t("settings.data.testing")
+                    : t("settings.data.test")}
+                </button>
+              </div>
+            )}
+
+            {sessionSaved === false && tokenSrc === "default" && (
+              <div className="mc-sm-test-row">
+                <button
+                  type="button"
+                  className="mc-sm-btn"
+                  disabled={testState.phase === "testing"}
+                  onClick={() => { void handleTest(); }}
+                >
+                  {testState.phase === "testing"
+                    ? t("settings.data.testing")
+                    : t("settings.data.test")}
                 </button>
               </div>
             )}
@@ -187,13 +243,13 @@ function DataTab({
                   testState.result.ok ? " mc-sm-test-ok" : " mc-sm-test-err"
                 }`}
               >
-                {testState.result.ok ? "Connection OK" : testState.result.message}
+                {testState.result.ok ? t("settings.data.test.ok") : testState.result.message}
               </div>
             )}
-          </div>
+          </section>
 
           {/* Fallback toggle */}
-          <div className="mc-sm-section">
+          <section className="mc-sm-card">
             <label className="mc-sm-toggle-row">
               <input
                 type="checkbox"
@@ -201,16 +257,16 @@ function DataTab({
                 checked={fallbackEnabled}
                 onChange={(e) => onFallbackChange(e.target.checked)}
               />
-              <span className="mc-sm-toggle-label">Fallback to MOEX if BCS fails</span>
+              <span className="mc-sm-toggle-label">{t("settings.data.fallback")}</span>
             </label>
-          </div>
+          </section>
         </>
       )}
 
       <div className="mc-sm-note">
         {providerId === "bcs"
-          ? "Token is held in session memory only — it is lost when the app restarts or the page reloads. BCS support is experimental."
-          : "MOEX direct data. No authentication required."}
+          ? t("settings.data.token.note.session")
+          : t("settings.data.token.note.moex")}
       </div>
     </div>
   );
@@ -230,10 +286,11 @@ function LiveTab({
   SettingsModalProps,
   "liveEnabled" | "onLiveEnabledChange" | "liveStatus" | "lastLiveUpdateAt" | "onReconnect"
 >) {
+  const { t } = useTranslation();
   return (
     <div className="mc-sm-tab-content">
-      <div className="mc-sm-section">
-        <div className="mc-sm-section-label">Live Data Feed</div>
+      <section className="mc-sm-card">
+        <div className="mc-sm-card-label">{t("settings.live.feed")}</div>
         <label className="mc-sm-toggle-row">
           <input
             type="checkbox"
@@ -241,41 +298,42 @@ function LiveTab({
             checked={liveEnabled}
             onChange={(e) => onLiveEnabledChange(e.target.checked)}
           />
-          <span className="mc-sm-toggle-label">Enable live updates</span>
+          <span className="mc-sm-toggle-label">{t("settings.live.enable")}</span>
         </label>
-      </div>
+      </section>
 
-      <div className="mc-sm-section">
-        <div className="mc-sm-section-label">Status</div>
+      <section className="mc-sm-card">
+        <div className="mc-sm-card-label">{t("settings.live.status")}</div>
         <div className="mc-sm-live-status-row">
           <LiveStatusChip status={liveStatus} />
           {lastLiveUpdateAt && (
             <span className="mc-sm-last-update">
-              Last update: {lastLiveUpdateAt}
+              {t("settings.live.lastUpdate")}: {lastLiveUpdateAt}
             </span>
           )}
         </div>
-      </div>
+      </section>
 
       {liveEnabled && (
-        <div className="mc-sm-section">
+        <section className="mc-sm-card">
           <div className="mc-sm-note">
-            Poll intervals: quotes every 5 s, portfolio every 15 s, scanner every 60 s.
-            Intervals increase automatically when the app is in the background.
+            {t("settings.live.note")}
           </div>
-        </div>
+        </section>
       )}
 
-      <div className="mc-sm-section">
+      <section className="mc-sm-card">
         <button
           type="button"
-          className="mc-sm-btn mc-sm-btn-primary"
+          className="mc-sm-btn mc-sm-btn-primary mc-sm-btn-block"
           disabled={liveStatus === "reconnecting"}
           onClick={onReconnect}
         >
-          {liveStatus === "reconnecting" ? "Reconnecting…" : "Reconnect"}
+          {liveStatus === "reconnecting"
+            ? t("settings.live.reconnecting")
+            : t("settings.live.reconnect")}
         </button>
-      </div>
+      </section>
     </div>
   );
 }
@@ -285,6 +343,7 @@ function LiveTab({
 // ---------------------------------------------------------------------------
 
 function UpdatesTab() {
+  const { t } = useTranslation();
   const [checkState, setCheckState] = useState<UpdateCheckState>({ phase: "idle" });
 
   async function handleCheckUpdate() {
@@ -323,27 +382,29 @@ function UpdatesTab() {
 
   return (
     <div className="mc-sm-tab-content">
-      <div className="mc-sm-section">
-        <div className="mc-sm-section-label">Current version</div>
+      <section className="mc-sm-card">
+        <div className="mc-sm-card-label">{t("settings.updates.current")}</div>
         <div className="mc-sm-version-display">
           Technical Analyst v{CURRENT_APP_VERSION_NAME}
         </div>
-      </div>
+      </section>
 
-      <div className="mc-sm-section">
+      <section className="mc-sm-card">
         <button
           type="button"
-          className="mc-sm-btn mc-sm-btn-primary"
+          className="mc-sm-btn mc-sm-btn-primary mc-sm-btn-block"
           disabled={checkState.phase === "checking"}
           onClick={() => { void handleCheckUpdate(); }}
         >
-          {checkState.phase === "checking" ? "Checking…" : "Check for updates"}
+          {checkState.phase === "checking"
+            ? t("settings.updates.checking")
+            : t("settings.updates.check")}
         </button>
-      </div>
+      </section>
 
       {checkState.phase === "done" && "upToDate" in checkState && checkState.upToDate && (
         <div className="mc-sm-update-result mc-sm-update-ok">
-          You are on the latest version ({checkState.versionName}).
+          {t("settings.updates.upToDate")} ({checkState.versionName}).
         </div>
       )}
 
@@ -353,10 +414,7 @@ function UpdatesTab() {
         "unsupported" in checkState &&
         !!(checkState as { unsupported: unknown }).unsupported && (
           <div className="mc-sm-update-result mc-sm-update-warn">
-            <p>
-              Your version ({checkState.versionName}) is no longer supported. Please update to{" "}
-              {checkState.manifest.versionName}.
-            </p>
+            <p>{t("settings.updates.unsupported")} ({checkState.versionName} → {checkState.manifest.versionName})</p>
             {checkState.manifest.notes && (
               <ul className="mc-sm-release-notes">
                 {checkState.manifest.notes.map((note, i) => (
@@ -369,7 +427,7 @@ function UpdatesTab() {
               className="mc-sm-btn mc-sm-btn-primary"
               onClick={() => handleDownload(checkState.manifest.apkUrl)}
             >
-              Download APK v{checkState.manifest.versionName}
+              {t("settings.updates.download")} v{checkState.manifest.versionName}
             </button>
           </div>
         )}
@@ -380,12 +438,11 @@ function UpdatesTab() {
         !("unsupported" in checkState && checkState.unsupported) && (
           <div className="mc-sm-update-result mc-sm-update-available">
             <p>
-              Update available: v{(checkState as { manifest: AppUpdateManifest }).manifest.versionName}
-              {" "}(current: {checkState.versionName})
+              {t("settings.updates.available")}: v{(checkState as { manifest: AppUpdateManifest }).manifest.versionName}
             </p>
             {(checkState as { manifest: AppUpdateManifest }).manifest.releaseDate && (
               <p className="mc-sm-release-date">
-                Released: {(checkState as { manifest: AppUpdateManifest }).manifest.releaseDate}
+                {t("settings.updates.released")}: {(checkState as { manifest: AppUpdateManifest }).manifest.releaseDate}
               </p>
             )}
             {(checkState as { manifest: AppUpdateManifest }).manifest.notes && (
@@ -402,14 +459,14 @@ function UpdatesTab() {
                 handleDownload((checkState as { manifest: AppUpdateManifest }).manifest.apkUrl)
               }
             >
-              Download APK v{(checkState as { manifest: AppUpdateManifest }).manifest.versionName}
+              {t("settings.updates.download")} v{(checkState as { manifest: AppUpdateManifest }).manifest.versionName}
             </button>
           </div>
         )}
 
       {checkState.phase === "error" && (
         <div className="mc-sm-update-result mc-sm-update-err">
-          Update check failed: {checkState.message}
+          {t("settings.updates.failed")}: {checkState.message}
         </div>
       )}
     </div>
@@ -424,99 +481,108 @@ function AiTab({
   aiPanelMode,
   onAiPanelModeChange,
 }: Pick<SettingsModalProps, "aiPanelMode" | "onAiPanelModeChange">) {
+  const { t } = useTranslation();
   return (
     <div className="mc-sm-tab-content">
-      <div className="mc-sm-section">
-        <div className="mc-sm-section-label">AI Panel Mode</div>
-        <div className="mc-sm-choice-row">
+      <section className="mc-sm-card">
+        <div className="mc-sm-card-label">{t("settings.ai.mode")}</div>
+        <div className="mc-sm-segmented">
           <button
             type="button"
-            className={`mc-sm-choice-btn${aiPanelMode === "mock" ? " mc-sm-choice-btn-active" : ""}`}
+            className={`mc-sm-seg-btn${aiPanelMode === "mock" ? " mc-sm-seg-btn-active" : ""}`}
             onClick={() => onAiPanelModeChange("mock")}
           >
-            Mock
+            {t("settings.ai.mode.mock")}
           </button>
           <button
             type="button"
-            className={`mc-sm-choice-btn${aiPanelMode === "pa_short" ? " mc-sm-choice-btn-active" : ""}`}
+            className={`mc-sm-seg-btn${aiPanelMode === "pa_short" ? " mc-sm-seg-btn-active" : ""}`}
             onClick={() => onAiPanelModeChange("pa_short")}
           >
-            PA Short
+            {t("settings.ai.mode.pa_short")}
           </button>
         </div>
-      </div>
+      </section>
 
-      <div className="mc-sm-warn">
-        PA Short mode has not demonstrated consistent profitability in backtesting.
-        It is provided for research purposes only.
-      </div>
+      <section className="mc-sm-card mc-sm-warn-card">
+        {t("settings.ai.warning")}
+      </section>
 
-      <div className="mc-sm-section">
-        <div className="mc-sm-section-label">Mode descriptions</div>
+      <section className="mc-sm-card">
+        <div className="mc-sm-card-label">{t("settings.ai.descriptions")}</div>
         <div className="mc-sm-ai-desc-list">
           <div className="mc-sm-ai-desc-item">
-            <span className="mc-sm-ai-desc-name">Mock</span>
-            <span className="mc-sm-ai-desc-text">
-              Displays static placeholder analysis. No model inference is performed.
-              Safe for UI development and demos.
-            </span>
+            <span className="mc-sm-ai-desc-name">{t("settings.ai.mode.mock")}</span>
+            <span className="mc-sm-ai-desc-text">{t("settings.ai.desc.mock")}</span>
           </div>
           <div className="mc-sm-ai-desc-item">
-            <span className="mc-sm-ai-desc-name">PA Short</span>
-            <span className="mc-sm-ai-desc-text">
-              Local price action model running entirely on-device. Generates short
-              candlestick pattern summaries. No data leaves the device.
-            </span>
+            <span className="mc-sm-ai-desc-name">{t("settings.ai.mode.pa_short")}</span>
+            <span className="mc-sm-ai-desc-text">{t("settings.ai.desc.pa_short")}</span>
           </div>
         </div>
-      </div>
+      </section>
 
-      <div className="mc-sm-note">
-        AI analysis runs locally on your device. No data is sent to external servers.
-      </div>
+      <div className="mc-sm-note">{t("settings.ai.note")}</div>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Tab: About
+// Tab: About (includes language selector)
 // ---------------------------------------------------------------------------
 
 function AboutTab() {
+  const { t, lang } = useTranslation();
+  function pickLang(next: Lang) { setLanguage(next); }
   return (
     <div className="mc-sm-tab-content">
-      <div className="mc-sm-section mc-sm-about-header">
-        <div className="mc-sm-about-name">Technical Analyst</div>
+      <section className="mc-sm-card mc-sm-about-header">
+        <div className="mc-sm-about-name">{t("settings.about.app")}</div>
         <div className="mc-sm-about-version">v{CURRENT_APP_VERSION_NAME}</div>
-      </div>
+      </section>
 
-      <div className="mc-sm-section">
-        <div className="mc-sm-section-label">Data Sources</div>
+      <section className="mc-sm-card">
+        <div className="mc-sm-card-label">{t("settings.about.language")}</div>
+        <div className="mc-sm-segmented">
+          <button
+            type="button"
+            className={`mc-sm-seg-btn${lang === "ru" ? " mc-sm-seg-btn-active" : ""}`}
+            onClick={() => pickLang("ru")}
+          >
+            {t("settings.about.language.ru")}
+          </button>
+          <button
+            type="button"
+            className={`mc-sm-seg-btn${lang === "en" ? " mc-sm-seg-btn-active" : ""}`}
+            onClick={() => pickLang("en")}
+          >
+            {t("settings.about.language.en")}
+          </button>
+        </div>
+      </section>
+
+      <section className="mc-sm-card">
+        <div className="mc-sm-card-label">{t("settings.about.sources")}</div>
         <ul className="mc-sm-about-list">
-          <li>MOEX — Moscow Exchange public market data API</li>
-          <li>BCS Broker — authenticated portfolio and order data (experimental)</li>
+          <li>{t("settings.about.sources.moex")}</li>
+          <li>{t("settings.about.sources.bcs")}</li>
         </ul>
-      </div>
+      </section>
 
-      <div className="mc-sm-section">
-        <div className="mc-sm-section-label">AI &amp; Analysis</div>
+      <section className="mc-sm-card">
+        <div className="mc-sm-card-label">{t("settings.about.analysis")}</div>
         <ul className="mc-sm-about-list">
-          <li>All AI inference runs locally on-device</li>
-          <li>No analysis data is sent to external servers</li>
-          <li>Models are bundled with the app</li>
+          <li>{t("settings.about.analysis.local")}</li>
+          <li>{t("settings.about.analysis.noexternal")}</li>
+          <li>{t("settings.about.analysis.bundled")}</li>
         </ul>
-      </div>
+      </section>
 
-      <div className="mc-sm-warn">
-        This app does not provide trading recommendations, investment advice, or
-        signals of any kind. All data is for informational purposes only.
-        Trade at your own risk.
-      </div>
+      <section className="mc-sm-card mc-sm-warn-card">
+        {t("settings.about.warn")}
+      </section>
 
-      <div className="mc-sm-note">
-        Technical Analyst is an independent tool and is not affiliated with or
-        endorsed by MOEX, BCS Broker, or any other financial institution.
-      </div>
+      <div className="mc-sm-note">{t("settings.about.note")}</div>
     </div>
   );
 }
@@ -540,6 +606,7 @@ export function SettingsModal({
   aiPanelMode,
   onAiPanelModeChange,
 }: SettingsModalProps) {
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<Tab>("data");
 
   // Reset to first tab each time modal opens
@@ -551,12 +618,12 @@ export function SettingsModal({
 
   if (!open) return null;
 
-  const tabs: Array<{ id: Tab; label: string }> = [
-    { id: "data", label: "Data" },
-    { id: "live", label: "Live" },
-    { id: "updates", label: "Updates" },
-    { id: "ai", label: "AI" },
-    { id: "about", label: "About" },
+  const tabs: Array<{ id: Tab; key: string }> = [
+    { id: "data",    key: "settings.tab.data" },
+    { id: "live",    key: "settings.tab.live" },
+    { id: "updates", key: "settings.tab.updates" },
+    { id: "ai",      key: "settings.tab.ai" },
+    { id: "about",   key: "settings.tab.about" },
   ];
 
   return (
@@ -569,16 +636,16 @@ export function SettingsModal({
       />
 
       {/* Sheet */}
-      <div className="mc-sm-sheet" role="dialog" aria-label="Settings" aria-modal="true">
+      <div className="mc-sm-sheet" role="dialog" aria-label={t("settings.title")} aria-modal="true">
 
         {/* Header */}
         <div className="mc-sm-header">
-          <span className="mc-sm-title">Settings</span>
+          <span className="mc-sm-title">{t("settings.title")}</span>
           <button
             type="button"
             className="mc-sm-close"
             onClick={onClose}
-            aria-label="Close settings"
+            aria-label="Close"
           >
             ×
           </button>
@@ -597,7 +664,7 @@ export function SettingsModal({
               }
               onClick={() => setActiveTab(tab.id)}
             >
-              {tab.label}
+              {t(tab.key)}
             </button>
           ))}
         </div>

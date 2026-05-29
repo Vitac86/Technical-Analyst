@@ -17,6 +17,7 @@ import { loadBcsOlderChunk } from '../api/bcsMarketData';
 import { computePaShortSignal, initPaModel, onPaModelReady } from '../ml/paShortSignal';
 import type { PaShortSignalResult } from '../ml/paShortSignal';
 import type { AiPanelMode } from '../components/mobile/AiSignalPanel';
+import { useTranslation } from '../i18n/useTranslation';
 import '../styles/mobile.css';
 
 // ---------------------------------------------------------------------------
@@ -63,14 +64,6 @@ const MOEX_INTERVAL_LABEL: Record<Timeframe, string> = {
 // ---------------------------------------------------------------------------
 
 type ProviderStatus = 'moex' | 'bcs' | 'bcs-fallback';
-
-function providerStatusLabel(status: ProviderStatus): string {
-  switch (status) {
-    case 'moex':         return 'Data: MOEX';
-    case 'bcs':          return 'Data: BCS';
-    case 'bcs-fallback': return 'Data: BCS→MOEX';
-  }
-}
 
 // ---------------------------------------------------------------------------
 // localStorage helpers (small UI preferences only — no candle data, no tokens)
@@ -220,6 +213,7 @@ function formatSource(src: MoexSource): string {
 // ---------------------------------------------------------------------------
 
 export function MobileChartPage() {
+  const { t } = useTranslation();
   const [source,     setSource]     = useState<MoexSource>(initSource);
   const [timeframe,  setTimeframe]  = useState<Timeframe>(initTimeframe);
   const [datePreset, setDatePreset] = useState<DatePreset>(() => initPreset(initTimeframe()));
@@ -636,7 +630,17 @@ export function MobileChartPage() {
   const staleHint = freshnessHint(timeframe, latestChartCandle?.begin);
 
   const effectiveLiveEnabled = liveEnabled && timeframe !== '1d';
-  const liveStateText = loading?"SYNCING":!effectiveLiveEnabled?"PAUSED":liveStatus==="error"?"ERROR":"LIVE";
+  const liveStateText = loading
+    ? t('chart.syncing')
+    : !effectiveLiveEnabled
+      ? t('chart.paused')
+      : liveStatus === 'error'
+        ? t('chart.error')
+        : liveStatus === 'reconnecting'
+          ? t('chart.reconnecting')
+          : liveStatus === 'stale'
+            ? t('chart.stale')
+            : t('chart.live');
   const liveBadgeTone = loading ? 'syncing' : liveStatus;
   const compactError = error && hasData ? error : null;
 
@@ -699,7 +703,7 @@ export function MobileChartPage() {
             inputMode="text"
             className="mc-search-input"
             value={searchQuery}
-            placeholder="Search ticker…"
+            placeholder={t('chart.search.placeholder')}
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="characters"
@@ -746,7 +750,7 @@ export function MobileChartPage() {
             disabled={loading}
             title="Refresh chart data"
           >
-            {loading ? 'Loading' : 'Refresh'}
+            {loading ? t('chart.loading') : t('chart.refresh')}
           </button>
         </div>
 
@@ -805,10 +809,10 @@ export function MobileChartPage() {
             ) : null}
             {/* Older-candle loading status (BCS mode) */}
             {olderLoadEnabled && isLoadingOlder ? (
-              <div className="mc-older-loading-pill">Loading older candles…</div>
+              <div className="mc-older-loading-pill">{t('chart.olderLoading')}</div>
             ) : null}
             {olderLoadEnabled && noMoreOlderCandles && !isLoadingOlder ? (
-              <div className="mc-older-none-pill">No older candles</div>
+              <div className="mc-older-none-pill">{t('chart.olderNone')}</div>
             ) : null}
             {olderLoadEnabled && olderLoadError && !isLoadingOlder ? (
               <div className="mc-older-error-pill">{olderLoadError}</div>
@@ -817,7 +821,7 @@ export function MobileChartPage() {
         ) : loading ? (
           <div className="mc-state mc-state-loading">
             <div className="mc-spinner" aria-hidden="true" />
-            Loading {source.ticker} · {timeframe}…
+            {t('chart.loading')} {source.ticker} · {timeframe}…
           </div>
         ) : error ? (
           <div className="mc-state mc-state-error" role="alert">
@@ -828,7 +832,7 @@ export function MobileChartPage() {
           </div>
         ) : noData ? (
           <div className="mc-state mc-state-empty">
-            No candles for {source.ticker} · {timeframe} · {datePreset}
+            {t('chart.nodata')} {source.ticker} · {timeframe} · {datePreset}
           </div>
         ) : null}
       </div>
@@ -841,16 +845,16 @@ export function MobileChartPage() {
     <span>{timeframe}</span><span className="mc-bs-sep">·</span>
     <span>{datePreset}</span><span className="mc-bs-sep">·</span>
     <span>{chartCandleCount} candles</span><span className="mc-bs-sep">·</span>
-    <span className={"mc-footer-state mc-footer-state-"+liveStateText.toLowerCase()}>{liveStateText}</span>
+    <span className={"mc-footer-state mc-footer-state-"+liveBadgeTone}>{liveStateText}</span>
     <span className="mc-bs-sep">·</span>
-    <span className={"mc-footer-provider mc-footer-provider-"+providerStatus}>{providerStatusLabel(providerStatus)}</span>
+    <span className={"mc-footer-provider mc-footer-provider-"+providerStatus}>{providerStatus==='moex'?'MOEX':providerStatus==='bcs'?'BCS':'BCS→MOEX'}</span>
   </div>
   <div className="mc-bottom-tabs" role="tablist">
     {(["info","ai","depth"] as const).map(tab=>(
       <button key={tab} type="button" role="tab" aria-selected={activeTab===tab}
         className={"mc-bottom-tab"+(activeTab===tab?" mc-bottom-tab-active":"")}
         onClick={()=>setActiveTab(tab)}>
-        {tab==="info"?"Info":tab==="ai"?"AI":"Depth"}
+        {tab==="info"?t('chart.tab.info'):tab==="ai"?t('chart.tab.ai'):t('chart.tab.depth')}
       </button>
     ))}
   </div>
@@ -867,11 +871,11 @@ export function MobileChartPage() {
           </div>
         )}
         <div className="mc-info-meta">
-          <span>Last: {latestChartCandle?.begin??"--"}</span>
-          {lastUpdateTime?<span>Live: {lastUpdateTime}</span>:null}
-          {lastRefreshTime?<span>Refresh: {lastRefreshTime}</span>:null}
+          <span>{t('chart.last')}: {latestChartCandle?.begin??"--"}</span>
+          {lastUpdateTime?<span>{t('chart.live')}: {lastUpdateTime}</span>:null}
+          {lastRefreshTime?<span>{t('chart.refreshTime')}: {lastRefreshTime}</span>:null}
           {staleHint?<span className="mc-footer-stale">{staleHint}</span>:null}
-          {compactError?<span className="mc-footer-error">Refresh failed</span>:null}
+          {compactError?<span className="mc-footer-error">{t('chart.refreshFailed')}</span>:null}
           {fallbackWarning?<span className="mc-footer-fallback">BCS-MOEX</span>:null}
         </div>
         {diagnosticsOpen&&(
@@ -891,7 +895,7 @@ export function MobileChartPage() {
         <button type="button"
           className={"mc-data-toggle"+(diagnosticsOpen?" mc-data-toggle-on":"")}
           onClick={()=>setDiagnosticsOpen(v=>!v)}>
-          {diagnosticsOpen?"Hide data":"Data"}
+          {diagnosticsOpen?t('chart.tab.dataHide'):t('chart.tab.data')}
         </button>
       </div>
     )}
@@ -903,8 +907,8 @@ export function MobileChartPage() {
         active={activeTab==="depth"&&!drawerOpen&&!settingsOpen}/>
     )}
   </div>
-  {olderLoadEnabled&&isLoadingOlder?<div className="mc-older-loading-pill">Loading older candles...</div>:null}
-  {olderLoadEnabled&&noMoreOlderCandles&&!isLoadingOlder?<div className="mc-older-none-pill">No older candles</div>:null}
+  {olderLoadEnabled&&isLoadingOlder?<div className="mc-older-loading-pill">{t('chart.olderLoading')}</div>:null}
+  {olderLoadEnabled&&noMoreOlderCandles&&!isLoadingOlder?<div className="mc-older-none-pill">{t('chart.olderNone')}</div>:null}
   {olderLoadEnabled&&olderLoadError&&!isLoadingOlder?<div className="mc-older-error-pill">{olderLoadError}</div>:null}
 </>
 ):null}
