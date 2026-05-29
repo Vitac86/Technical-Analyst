@@ -248,3 +248,39 @@ export async function loadBcsOlderChunk(
   candles.sort((a, b) => (a.begin < b.begin ? -1 : a.begin > b.begin ? 1 : 0));
   return candles;
 }
+
+// Recent-candle window for live polling (days to look back per timeframe).
+const BCS_RECENT_WINDOW_DAYS: Record<string, number> = {
+  '5m':  1,
+  '15m': 2,
+  '1h':  7,
+  '4h':  30,
+};
+
+// Fetches the trailing window of candles for live polling.
+// Returns [] for daily timeframes, unknown timeframes, or on any error.
+export async function loadBcsRecentCandles(
+  ticker: string,
+  classCode: string,
+  timeframe: string,
+): Promise<MoexCandle[]> {
+  if (timeframe === '1d') return [];
+
+  const bcsInterval = BCS_INTERVAL_MAP[timeframe];
+  if (!bcsInterval) return [];
+
+  const windowDays = BCS_RECENT_WINDOW_DAYS[timeframe] ?? 1;
+  const now = new Date();
+  const fromMs = now.getTime() - windowDays * 86_400_000;
+
+  const fromIso = new Date(fromMs).toISOString();
+  const toIso   = now.toISOString();
+
+  try {
+    const candles = await fetchBcsCandles(ticker, classCode, bcsInterval, fromIso, toIso);
+    candles.sort((a, b) => (a.begin < b.begin ? -1 : a.begin > b.begin ? 1 : 0));
+    return candles;
+  } catch {
+    return [];
+  }
+}

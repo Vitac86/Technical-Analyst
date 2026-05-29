@@ -3,7 +3,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { MobilePriceChart }   from '../components/mobile/MobilePriceChart';
 import { AssetDrawer }        from '../components/mobile/AssetDrawer';
 import { AiSignalPanel }      from '../components/mobile/AiSignalPanel';
-import { ProviderSettings }   from '../components/mobile/ProviderSettings';
+import { SettingsModal }      from '../components/mobile/SettingsModal';
+import { OrderBookPanel }     from '../components/mobile/OrderBookPanel';
 import { searchMoex }         from '../api/moexDirect';
 import type { MoexCandle, MoexSearchResult, MoexSource } from '../api/moexDirect';
 import { getProvider }        from '../data/providerRegistry';
@@ -44,15 +45,10 @@ const SAFE_DATE_PRESETS: Record<Timeframe, readonly DatePreset[]> = {
   '1d':  ['6M', '1Y', '3Y'],
 };
 
-type LiveStatus = 'live' | 'paused' | 'error';
+type LiveStatus = 'live' | 'paused' | 'error' | 'stale' | 'reconnecting';
 
-// Live poll interval per timeframe. 1d is disabled entirely.
-const POLL_INTERVAL_MS: Record<string, number> = {
-  '5m':  1000,
-  '15m': 1000,
-  '1h':  5000,
-  '4h':  10000,
-};
+const MOEX_POLL_MS: Record<string,number> = {"5m":3000,"15m":5000,"1h":5000,"4h":10000};
+const BCS_POLL_MS:  Record<string,number> = {"5m":5000,"15m":10000,"1h":10000,"4h":15000};
 
 const MOEX_INTERVAL_LABEL: Record<Timeframe, string> = {
   '5m':  '1m -> 5m',
@@ -149,7 +145,7 @@ function safePresetForTimeframe(tf: Timeframe, preset: string | null): DatePrese
 }
 
 function formatPollInterval(tf: Timeframe): string {
-  const ms = POLL_INTERVAL_MS[tf];
+  const ms = MOEX_POLL_MS[tf];
   return ms ? `${ms / 1000}s` : 'off';
 }
 
@@ -257,6 +253,7 @@ export function MobileChartPage() {
   // Incremented once when the PA model finishes loading, to re-trigger signal recompute.
   const [paModelTick,     setPaModelTick]     = useState(0);
   const [settingsOpen,    setSettingsOpen]    = useState(false);
+  const [activeTab, setActiveTab] = useState<"info"|"ai"|"depth">("info");
 
   // Provider settings
   const [providerId,       setProviderId]       = useState<MarketDataProviderId>(initProviderId);
@@ -451,7 +448,7 @@ export function MobileChartPage() {
   // Only MOEX provider runs live polling.
 
   useEffect(() => {
-    const liveDisabled = !liveEnabled || timeframe === '1d' || providerId === 'bcs';
+    const liveDisabled = !liveEnabled || timeframe === '1d';
     if (liveDisabled) {
       setLiveStatus('paused');
       return;
@@ -467,7 +464,7 @@ export function MobileChartPage() {
 
       liveInFlightRef.current = true;
       try {
-        const recent = await getProvider('moex').loadRecentCandles(source, timeframe, controller.signal);
+        const recent = await getProvider(providerId).loadRecentCandles(source, timeframe);
         if (cancelled) return;
         if (recent.length > 0) {
           setLiveCandle(recent[recent.length - 1]);
@@ -488,7 +485,7 @@ export function MobileChartPage() {
     }
 
     void pollOnce();
-    const pollMs = POLL_INTERVAL_MS[timeframe] ?? 1000;
+    const pollMs = (providerId==="bcs" ? BCS_POLL_MS[timeframe] : MOEX_POLL_MS[timeframe]) ?? 5000;
     const id = setInterval(() => { void pollOnce(); }, pollMs);
     document.addEventListener('visibilitychange', onVisibilityChange);
 
@@ -638,15 +635,8 @@ export function MobileChartPage() {
     fullCandles.length + (liveCandle && lastFullCandle && liveCandle.begin > lastFullCandle.begin ? 1 : 0);
   const staleHint = freshnessHint(timeframe, latestChartCandle?.begin);
 
-  // When BCS is selected, live is always paused (not yet implemented)
-  const effectiveLiveEnabled = liveEnabled && providerId !== 'bcs';
-  const liveStateText = loading
-    ? 'SYNCING'
-    : timeframe === '1d' || !effectiveLiveEnabled
-      ? 'PAUSED'
-      : liveStatus === 'error'
-        ? 'LIVE ERROR'
-        : 'LIVE';
+  const effectiveLiveEnabled = liveEnabled && timeframe !== '1d';
+  const liveStateText = loading?"SYNCING":!effectiveLiveEnabled?"PAUSED":liveStatus==="error"?"ERROR":"LIVE";
   const liveBadgeTone = loading ? 'syncing' : liveStatus;
   const compactError = error && hasData ? error : null;
 
@@ -659,13 +649,13 @@ export function MobileChartPage() {
     <div className="mc-page">
 
       {/* ── Provider settings modal ──────────────────────────────────── */}
-      <ProviderSettings
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        providerId={providerId}
-        onProviderChange={handleProviderChange}
-        fallbackEnabled={fallbackEnabled}
-        onFallbackChange={handleFallbackChange}
+      <SettingsModal open={settingsOpen} onClose={()=>setSettingsOpen(false)}
+        providerId={providerId} onProviderChange={handleProviderChange}
+        fallbackEnabled={fallbackEnabled} onFallbackChange={handleFallbackChange}
+        liveEnabled={liveEnabled} onLiveEnabledChange={setLiveEnabled}
+        liveStatus={liveStatus} lastLiveUpdateAt={lastUpdateTime}
+        onReconnect={()=>{setLiveStatus("paused");void loadCandles(source,timeframe,datePreset,{preserveData:true});}}
+        aiPanelMode={aiPanelMode} onAiPanelModeChange={setAiPanelMode}
       />
 
       {/* ── Asset drawer ────────────────────────────────────────────── */}
@@ -751,14 +741,6 @@ export function MobileChartPage() {
           ))}
           <button
             type="button"
-            className={`mc-chip mc-chip-live${effectiveLiveEnabled ? ' mc-chip-live-on' : ''}`}
-            onClick={() => setLiveEnabled(v => !v)}
-            title={liveEnabled ? 'Pause live updates' : 'Enable live updates'}
-          >
-            ● LIVE
-          </button>
-          <button
-            type="button"
             className="mc-chip mc-chip-refresh"
             onClick={handleManualRefresh}
             disabled={loading}
@@ -799,14 +781,6 @@ export function MobileChartPage() {
           title={showEma20 ? 'Hide EMA 20' : 'Show EMA 20'}
         >
           EMA
-        </button>
-        <button
-          type="button"
-          className={`mc-overlay-chip${showAiSignalPanel ? ' mc-overlay-chip-active mc-overlay-chip-ai' : ''}`}
-          onClick={() => setShowAiSignalPanel(v => !v)}
-          title={showAiSignalPanel ? 'Hide AI Signal' : 'Show AI Signal'}
-        >
-          AI
         </button>
       </div>
 
@@ -860,63 +834,80 @@ export function MobileChartPage() {
       </div>
 
       {/* ── Footer ──────────────────────────────────────────────────── */}
-      {hasData ? (
-        <>
-          <div className="mc-footer">
-            <div className="mc-footer-main">
-              <span>{source.ticker}</span>
-              <span>{timeframe}</span>
-              <span>{datePreset}</span>
-              <span>{chartCandleCount} candles</span>
-              <span className={`mc-footer-state mc-footer-state-${liveStateText.toLowerCase().replace(' ', '-')}`}>
-                {liveStateText}
-              </span>
-              <span className={`mc-footer-provider mc-footer-provider-${providerStatus}`}>
-                {providerStatusLabel(providerStatus)}
-              </span>
-              <button
-                type="button"
-                className={`mc-data-toggle${diagnosticsOpen ? ' mc-data-toggle-on' : ''}`}
-                onClick={() => setDiagnosticsOpen(v => !v)}
-              >
-                Data
-              </button>
-            </div>
-            <div className="mc-footer-detail">
-              <span>Last: {latestChartCandle?.begin ?? '--'}</span>
-              {lastUpdateTime ? <span>Live: {lastUpdateTime}</span> : null}
-              {staleHint ? <span className="mc-footer-stale">{staleHint}</span> : null}
-              {compactError ? <span className="mc-footer-error">Refresh failed</span> : null}
-              {fallbackWarning ? <span className="mc-footer-fallback">BCS→MOEX</span> : null}
-            </div>
+      {hasData?(
+<>
+  <div className="mc-bottom-status-row">
+    <span>{source.ticker}</span><span className="mc-bs-sep">·</span>
+    <span>{timeframe}</span><span className="mc-bs-sep">·</span>
+    <span>{datePreset}</span><span className="mc-bs-sep">·</span>
+    <span>{chartCandleCount} candles</span><span className="mc-bs-sep">·</span>
+    <span className={"mc-footer-state mc-footer-state-"+liveStateText.toLowerCase()}>{liveStateText}</span>
+    <span className="mc-bs-sep">·</span>
+    <span className={"mc-footer-provider mc-footer-provider-"+providerStatus}>{providerStatusLabel(providerStatus)}</span>
+  </div>
+  <div className="mc-bottom-tabs" role="tablist">
+    {(["info","ai","depth"] as const).map(tab=>(
+      <button key={tab} type="button" role="tab" aria-selected={activeTab===tab}
+        className={"mc-bottom-tab"+(activeTab===tab?" mc-bottom-tab-active":"")}
+        onClick={()=>setActiveTab(tab)}>
+        {tab==="info"?"Info":tab==="ai"?"AI":"Depth"}
+      </button>
+    ))}
+  </div>
+  <div className="mc-bottom-content">
+    {activeTab==="info"&&(
+      <div className="mc-tab-info">
+        {latestChartCandle&&(
+          <div className="mc-info-ohlcv">
+            <span className="mc-info-label">O</span><span className="mc-info-val">{latestChartCandle.open}</span>
+            <span className="mc-info-label">H</span><span className="mc-info-val">{latestChartCandle.high}</span>
+            <span className="mc-info-label">L</span><span className="mc-info-val">{latestChartCandle.low}</span>
+            <span className="mc-info-label">C</span><span className="mc-info-val">{latestChartCandle.close}</span>
+            {latestChartCandle.volume!=null&&(<><span className="mc-info-label">V</span><span className="mc-info-val">{latestChartCandle.volume.toLocaleString()}</span></>)}
           </div>
-
-          {diagnosticsOpen ? (
-            <div className="mc-diagnostics">
-              <span>{source.engine}/{source.market}/{source.board}/{source.ticker}</span>
-              <span>Provider: {providerId.toUpperCase()}</span>
-              <span>MOEX: {MOEX_INTERVAL_LABEL[timeframe]}</span>
-              <span>Count: {chartCandleCount}</span>
-              <span>First: {firstCandle?.begin ?? '--'}</span>
-              <span>Last: {latestChartCandle?.begin ?? '--'}</span>
-              <span>Full: {lastRefreshTime ?? '--'}</span>
-              <span>Live: {lastUpdateTime ?? '--'}</span>
-              <span>Poll: {formatPollInterval(timeframe)}</span>
-              {fallbackWarning ? <span>Fallback: active</span> : null}
-              {noMoreOlderCandles ? <span>Older: exhausted</span> : null}
-            </div>
-          ) : null}
-
-          {showAiSignalPanel ? (
-            <AiSignalPanel
-              mode={aiPanelMode}
-              onModeChange={setAiPanelMode}
-              mockSignal={aiSignal}
-              paSignal={paSignal}
-            />
-          ) : null}
-        </>
-      ) : null}
+        )}
+        <div className="mc-info-meta">
+          <span>Last: {latestChartCandle?.begin??"--"}</span>
+          {lastUpdateTime?<span>Live: {lastUpdateTime}</span>:null}
+          {lastRefreshTime?<span>Refresh: {lastRefreshTime}</span>:null}
+          {staleHint?<span className="mc-footer-stale">{staleHint}</span>:null}
+          {compactError?<span className="mc-footer-error">Refresh failed</span>:null}
+          {fallbackWarning?<span className="mc-footer-fallback">BCS-MOEX</span>:null}
+        </div>
+        {diagnosticsOpen&&(
+          <div className="mc-diagnostics">
+            <span>{source.engine}/{source.market}/{source.board}/{source.ticker}</span>
+            <span>Provider: {providerId.toUpperCase()}</span>
+            <span>MOEX: {MOEX_INTERVAL_LABEL[timeframe]}</span>
+            <span>Count: {chartCandleCount}</span>
+            <span>First: {firstCandle?.begin??"--"}</span>
+            <span>Last: {latestChartCandle?.begin??"--"}</span>
+            <span>Full: {lastRefreshTime??"--"}</span>
+            <span>Live: {lastUpdateTime??"--"}</span>
+            {fallbackWarning?<span>Fallback: active</span>:null}
+            {noMoreOlderCandles?<span>Older: exhausted</span>:null}
+          </div>
+        )}
+        <button type="button"
+          className={"mc-data-toggle"+(diagnosticsOpen?" mc-data-toggle-on":"")}
+          onClick={()=>setDiagnosticsOpen(v=>!v)}>
+          {diagnosticsOpen?"Hide data":"Data"}
+        </button>
+      </div>
+    )}
+    {activeTab==="ai"&&(
+      <AiSignalPanel mode={aiPanelMode} onModeChange={setAiPanelMode} mockSignal={aiSignal} paSignal={paSignal}/>
+    )}
+    {activeTab==="depth"&&(
+      <OrderBookPanel ticker={source.ticker} classCode={source.board}
+        active={activeTab==="depth"&&!drawerOpen&&!settingsOpen}/>
+    )}
+  </div>
+  {olderLoadEnabled&&isLoadingOlder?<div className="mc-older-loading-pill">Loading older candles...</div>:null}
+  {olderLoadEnabled&&noMoreOlderCandles&&!isLoadingOlder?<div className="mc-older-none-pill">No older candles</div>:null}
+  {olderLoadEnabled&&olderLoadError&&!isLoadingOlder?<div className="mc-older-error-pill">{olderLoadError}</div>:null}
+</>
+):null}
 
     </div>
   );

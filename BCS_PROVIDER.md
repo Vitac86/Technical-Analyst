@@ -194,3 +194,7 @@ A HTTP 400 from BCS means the request parameters are invalid.
 - Candles 400 → _"BCS rejected the candle request. Try a smaller range or another timeframe."_
 
 The app parses `type` and `traceId` fields from the 400 response body for internal diagnostics, but never logs or displays them to the user in raw form.
+
+## Order Book (v2.0.0)
+GET https://be.broker.ru/trade-api-market-data-connector/api/v1/order-book
+Params: ticker, classCode, depth. Auth: Bearer. BCS-only. 2s poll. No persistence.

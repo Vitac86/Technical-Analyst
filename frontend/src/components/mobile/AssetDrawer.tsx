@@ -3,16 +3,7 @@ import { fetchMoexQuote, searchMoex } from '../../api/moexDirect';
 import type { MoexQuote, MoexSearchResult } from '../../api/moexDirect';
 import { makeAssetId } from '../../utils/mobileWatchlist';
 import type { WatchlistAsset } from '../../utils/mobileWatchlist';
-import { checkForAppUpdate, CURRENT_APP_VERSION_NAME } from '../../api/appUpdate';
-import type { AppUpdateManifest } from '../../api/appUpdate';
-
-type UpdatePhase =
-  | { phase: 'idle' }
-  | { phase: 'checking' }
-  | { phase: 'up_to_date' }
-  | { phase: 'update_available'; manifest: AppUpdateManifest }
-  | { phase: 'unsupported'; manifest: AppUpdateManifest }
-  | { phase: 'error'; message: string };
+import { CURRENT_APP_VERSION_NAME } from '../../api/appUpdate';
 
 type DrawerQuoteState = {
   quote: MoexQuote | null;
@@ -60,7 +51,6 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
   const [dupMsg,         setDupMsg]         = useState(false);
   const [aliasId,        setAliasId]        = useState<string | null>(null);
   const [aliasValue,     setAliasValue]     = useState('');
-  const [updateState,    setUpdateState]    = useState<UpdatePhase>({ phase: 'idle' });
   const [quotes,         setQuotes]         = useState<Record<string, DrawerQuoteState>>({});
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const quoteInFlightRef = useRef(false);
@@ -198,30 +188,6 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
     setAliasId(null);
   }
 
-  async function handleCheckUpdate() {
-    setUpdateState({ phase: 'checking' });
-    try {
-      const result = await checkForAppUpdate();
-      if (result.status === 'up_to_date') {
-        setUpdateState({ phase: 'up_to_date' });
-      } else if (result.status === 'update_available') {
-        setUpdateState({ phase: 'update_available', manifest: result.manifest });
-      } else {
-        setUpdateState({ phase: 'unsupported', manifest: result.manifest });
-      }
-    } catch (err) {
-      setUpdateState({
-        phase: 'error',
-        message: err instanceof Error ? err.message : 'Update check failed',
-      });
-    }
-  }
-
-  function openApkUrl(url: string) {
-    const opened = window.open(url, '_system');
-    if (!opened) window.location.href = url;
-  }
-
   return (
     <>
       {/* Dim overlay — tap to close */}
@@ -264,7 +230,7 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
                   className="mc-dh-btn"
                   onClick={() => { setEditMode(true); setShowSearch(false); }}
                 >
-                  Edit
+                  Manage
                 </button>
               </>
             )}
@@ -300,16 +266,22 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
             {dupMsg && <div className="mc-drawer-dup-msg">Already in watchlist</div>}
             {searchResults.length > 0 && (
               <ul className="mc-drawer-search-list">
-                {searchResults.map(r => (
-                  <li
-                    key={`${r.engine}:${r.market}:${r.board}:${r.ticker}`}
-                    onPointerDown={() => handleAddResult(r)}
-                  >
-                    <span className="mc-dsr-ticker">{r.ticker}</span>
-                    <span className="mc-dsr-name">{r.name}</span>
-                    <span className="mc-dsr-meta">{r.board}</span>
-                  </li>
-                ))}
+                {searchResults.map(r => {
+                  const resultId = makeAssetId(r.engine, r.market, r.board, r.ticker);
+                  const isAdded = watchlist.some(a => a.id === resultId);
+                  return (
+                    <li
+                      key={`${r.engine}:${r.market}:${r.board}:${r.ticker}`}
+                      style={isAdded ? { opacity: 0.6 } : undefined}
+                      onPointerDown={isAdded ? undefined : () => handleAddResult(r)}
+                    >
+                      <span className="mc-dsr-ticker">{r.ticker}</span>
+                      <span className="mc-dsr-name">{r.name}</span>
+                      <span className="mc-dsr-meta">{r.board}</span>
+                      {isAdded && <span className="mc-dsr-added">Added</span>}
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>
@@ -319,7 +291,8 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
         <div className="mc-drawer-list">
           {watchlist.length === 0 ? (
             <div className="mc-drawer-empty">
-              <p>No assets in watchlist.</p>
+              <p className="mc-drawer-empty-title">No assets yet</p>
+              <p className="mc-drawer-empty-sub">Add your first instrument to the watchlist</p>
               <button type="button" className="mc-dh-btn" onClick={() => setShowSearch(true)}>
                 + Add asset
               </button>
@@ -403,24 +376,26 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
                       >
                         Aa
                       </button>
-                      <button
-                        type="button"
-                        className="mc-edit-btn mc-edit-up"
-                        disabled={idx === 0}
-                        title="Move up"
-                        onClick={() => swap(idx, -1)}
-                      >
-                        ↑
-                      </button>
-                      <button
-                        type="button"
-                        className="mc-edit-btn mc-edit-dn"
-                        disabled={idx === watchlist.length - 1}
-                        title="Move down"
-                        onClick={() => swap(idx, 1)}
-                      >
-                        ↓
-                      </button>
+                      <div className="mc-edit-order-btns">
+                        <button
+                          type="button"
+                          className="mc-edit-btn mc-edit-up"
+                          disabled={idx === 0}
+                          title="Move up"
+                          onClick={() => swap(idx, -1)}
+                        >
+                          ↑
+                        </button>
+                        <button
+                          type="button"
+                          className="mc-edit-btn mc-edit-dn"
+                          disabled={idx === watchlist.length - 1}
+                          title="Move down"
+                          onClick={() => swap(idx, 1)}
+                        >
+                          ↓
+                        </button>
+                      </div>
                       <button
                         type="button"
                         className="mc-edit-btn mc-edit-del"
@@ -437,64 +412,11 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
           )}
         </div>
 
-        {/* ── Settings section ────────────────────────────────────────── */}
-        {onSettingsOpen && (
-          <div className="mc-update-section" style={{ borderBottom: '1px solid var(--mc-border)', paddingBottom: 10 }}>
-            <button
-              type="button"
-              className="mc-update-check-btn"
-              onClick={() => { onClose(); onSettingsOpen(); }}
-            >
-              ⚙ Data source
-            </button>
-          </div>
-        )}
-
-        {/* ── Update section ──────────────────────────────────────────── */}
-        <div className="mc-update-section">
-          <div className="mc-update-version">v{CURRENT_APP_VERSION_NAME}</div>
-          {updateState.phase === 'idle' && (
-            <button type="button" className="mc-update-check-btn" onClick={handleCheckUpdate}>
-              Check update
-            </button>
-          )}
-          {updateState.phase === 'checking' && (
-            <span className="mc-update-status-text">Checking…</span>
-          )}
-          {updateState.phase === 'up_to_date' && (
-            <span className="mc-update-status-text mc-update-ok">App is up to date</span>
-          )}
-          {updateState.phase === 'update_available' && (
-            <div className="mc-update-available">
-              <div className="mc-update-info">Update available: v{updateState.manifest.versionName}</div>
-              {updateState.manifest.notes && updateState.manifest.notes.length > 0 && (
-                <ul className="mc-update-notes">
-                  {updateState.manifest.notes.map((note, i) => (
-                    <li key={i}>{note}</li>
-                  ))}
-                </ul>
-              )}
-              <button type="button" className="mc-update-download-btn" onClick={() => openApkUrl(updateState.manifest.apkUrl)}>
-                Download APK
-              </button>
-            </div>
-          )}
-          {updateState.phase === 'unsupported' && (
-            <div className="mc-update-available">
-              <div className="mc-update-unsupported">This version is no longer supported</div>
-              <button type="button" className="mc-update-download-btn" onClick={() => openApkUrl(updateState.manifest.apkUrl)}>
-                Download APK
-              </button>
-            </div>
-          )}
-          {updateState.phase === 'error' && (
-            <div className="mc-update-error-row">
-              <span className="mc-update-error">{updateState.message}</span>
-              <button type="button" className="mc-update-check-btn" onClick={handleCheckUpdate}>
-                Retry
-              </button>
-            </div>
-          )}
+        {/* ── Footer ──────────────────────────────────────────────────── */}
+        <div className="mc-drawer-footer">
+          <span className="mc-drawer-footer-version">v{CURRENT_APP_VERSION_NAME}</span>
+          {onSettingsOpen&&(<button type="button" className="mc-drawer-settings-btn"
+            onClick={()=>{onClose();onSettingsOpen();}} aria-label="Open settings">Settings</button>)}
         </div>
       </div>
     </>

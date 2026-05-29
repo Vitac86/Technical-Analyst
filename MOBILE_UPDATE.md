@@ -62,3 +62,7 @@ For distribution to other devices, create a release keystore once and reuse it f
 keytool -genkey -v -keystore release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias release
 ```
 Store `release.jks` securely and never commit it to the repository.
+
+## v2.0.0 (2026-05-29)
+Tag: v2.0.0 APK: technical-analyst-v2.0.0.apk versionCode: 20
+Changes: BCS order book, live fix, Settings hub, drawer UX, chart layout, AI research-only.

@@ -1,13 +1,1 @@
-{
-  "versionCode": 11,
-  "versionName": "1.0.10",
-  "apkUrl": "https://github.com/Vitac86/Technical-Analyst/releases/download/v1.0.10/technical-analyst-v1.0.10.apk",
-  "releaseDate": "2026-05-28",
-  "notes": [
-    "Added experimental local PA SHORT AI model (pa_short_v0)",
-    "Added local CatBoost JSON inference (no backend, no cloud)",
-    "Added 52-feature price-action feature calculation in app",
-    "Research model only — backtest not yet profitable",
-    "Clear research/backtest warning shown in panel"
-  ]
-}
+{"versionCode":20,"versionName":"2.0.0","apkUrl":"https://github.com/Vitac86/Technical-Analyst/releases/download/v2.0.0/technical-analyst-v2.0.0.apk","releaseDate":"2026-05-29","notes":["Added BCS order book / market depth","Fixed live chart updates and enabled live by default","Added unified Settings hub","Improved watchlist drawer UX","Improved mobile chart layout","Kept AI model research-only"]}

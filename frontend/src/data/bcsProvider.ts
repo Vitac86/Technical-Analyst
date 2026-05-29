@@ -1,4 +1,4 @@
-import { loadBcsCandles } from '../api/bcsMarketData';
+import { loadBcsCandles, loadBcsRecentCandles } from '../api/bcsMarketData';
 import type { MarketDataProvider, CandleLoadParams, MoexCandle, MoexQuote, MoexSource } from './types';
 
 // BCS live polling is not yet implemented; loadRecentCandles returns []
@@ -15,8 +15,9 @@ export const bcsProvider: MarketDataProvider = {
     return loadBcsCandles(source.ticker, classCode, timeframe, from, till);
   },
 
-  async loadRecentCandles(_source: MoexSource, _timeframe: string): Promise<MoexCandle[]> {
-    return [];
+  async loadRecentCandles(source: MoexSource, timeframe: string): Promise<MoexCandle[]> {
+    const classCode = source.board || 'TQBR';
+    return loadBcsRecentCandles(source.ticker, classCode, timeframe);
   },
 
   async fetchQuote(_source: MoexSource, _signal?: AbortSignal): Promise<MoexQuote | null> {
