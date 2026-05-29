@@ -1,11 +1,20 @@
 """
-Discover gold futures candidates on BCS.
+Discover gold futures candidates on BCS, with a strict gold-only filter.
 
 This script queries the BCS information service for FUTURES (and optionally
-GOODS) instruments and filters them down to plausible gold futures by ticker
-and by display/short name. It is intentionally lenient — the goal is to
-collect *candidates* for the availability scan, not to commit to a single
-ticker shape.
+GOODS) instruments and accepts only candidates that are genuinely gold-related
+Moscow-Exchange contracts. The default filter is intentionally narrow:
+
+* ``classCode == "SPBFUT"`` (BCS classCode for MOEX futures)
+* ticker matches a strong gold pattern:
+    - ``GD<futures-month-code><year>`` (e.g. GDH7, GDM6, GDU6, GDZ6)
+    - or ticker contains ``GLD`` / ``GOLD`` / ``GOLDRUB``
+* or displayName / shortName contains ``gold`` / ``goldrub`` / ``золото``
+
+A bare ``AU`` substring in the ticker is NOT enough on its own (this used to
+let through unrelated futures like ``AAU6``, ``92M6``, ``95M6``, ``AAM6``).
+Tickers like ``AU...`` will only pass when the instrument name also matches
+the gold name patterns.
 
 Auth
 ----
@@ -18,28 +27,16 @@ Tokens are NEVER printed or written to disk.
 
 Endpoints
 ---------
-By type        : GET https://be.broker.ru/trade-api-information-service
-                       /api/v1/instruments/by-type?type=FUTURES&size=50&page=0
-By base asset  : GET .../api/v1/instruments/by-type?type=FUTURES
-                       &size=50&page=0&baseAssetTicker=GOLD  (optional probe)
-
-Filters
--------
-A candidate is kept if any of the following is true:
-
-* ticker contains one of: GOLD, GLD, AU, GDA, GD, GOLDRUB
-* displayName / shortName matches gold/golden/au/zoloto (case-insensitive)
-* baseAssetTicker matches one of the gold tickers
-
-The instrument type must be ``FUTURES`` (we still check GOODS as a fallback
-to surface anything BCS might classify oddly).
+GET https://be.broker.ru/trade-api-information-service/api/v1/instruments/by-type
+    ?type=FUTURES&size=50&page=0
+GET .../by-type?type=GOODS                                  (optional fallback)
+GET .../by-type?type=FUTURES&baseAssetTicker=GOLD|GLD|AU     (probe)
 
 Outputs
 -------
 ml/reports/strategies/gold_futures_discovery.json
-ml/reports/strategies/gold_futures_discovery.csv
-
-Both gitignored (ml/reports/ is in .gitignore).
+ml/reports/strategies/gold_futures_discovery.csv            (accepted only)
+ml/reports/strategies/gold_futures_discovery_rejected.csv   (diagnostics)
 """
 from __future__ import annotations
 
@@ -49,12 +46,12 @@ import json
 import os
 import re
 import sys
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-# Allow running this file as a script.
 _THIS_FILE = Path(__file__).resolve()
 _REPO_ROOT = _THIS_FILE.parents[2]
 if str(_REPO_ROOT) not in sys.path:
@@ -70,21 +67,133 @@ from ml.instruments.bcs_instruments_by_type import (  # noqa: E402
 
 REPORT_DIR = _REPO_ROOT / "ml" / "reports" / "strategies"
 
-GOLD_TICKER_TOKENS = ("GOLD", "GLD", "GOLDRUB", "GDA", "GDC", "GD")
-GOLD_NAME_PATTERNS = (
-    re.compile(r"\bgold(en)?\b", re.IGNORECASE),
-    re.compile(r"\bзолот", re.IGNORECASE),
-    re.compile(r"\bau\b", re.IGNORECASE),
+# Strong ticker patterns.
+# GD + futures month-code letter + 1-2 digit year (BCS / MOEX style).
+# Month codes: F=Jan G=Feb H=Mar J=Apr K=May M=Jun N=Jul Q=Aug U=Sep V=Oct X=Nov Z=Dec
+FUTURES_MONTH_CODES = "FGHJKMNQUVXZ"
+STRICT_GD_TICKER_RE = re.compile(rf"^GD[{FUTURES_MONTH_CODES}]\d{{1,2}}$")
+STRICT_TICKER_TOKENS = ("GOLDRUB", "GOLD", "GLD")  # checked left-to-right; longest first
+
+# Strong name patterns (case-insensitive). Must match the literal word "gold"
+# (optionally followed by "rub" / "ен" / etc.) or any "золот..." stem.
+GOLD_NAME_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"gold(?:rub|en)?", re.IGNORECASE),
+    re.compile(r"золот", re.IGNORECASE),
 )
+
 DEFAULT_BASE_ASSET_PROBES = ("GOLD", "GLD", "AU")
-
-
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+DEFAULT_CLASS_CODE = "SPBFUT"
 
 
 # ---------------------------------------------------------------------------
-# Filtering
+# Filter
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FilterConfig:
+    """Settings driving accept/reject for each instrument."""
+    moex_only: bool = True
+    class_code: str = DEFAULT_CLASS_CODE
+    strict: bool = True
+    include_goods: bool = False
+
+
+# Categories used in the rejection summary. Keep in sync with the README.
+REJECT_CATEGORIES = (
+    "classCode_not_allowed",
+    "weak_gold_match",
+    "goods_excluded",
+    "missing_ticker",
+    "missing_classCode",
+)
+
+
+def _first_text(*values: Any) -> str | None:
+    for v in values:
+        if isinstance(v, str) and v.strip():
+            return v
+    return None
+
+
+def _name_matches_gold(*texts: Any) -> str | None:
+    for text in texts:
+        if not isinstance(text, str) or not text.strip():
+            continue
+        for pat in GOLD_NAME_PATTERNS:
+            m = pat.search(text)
+            if m:
+                return m.group(0)
+    return None
+
+
+def _strong_ticker_match(ticker: str) -> str | None:
+    """Return a short reason if the ticker is a strong gold match, else None."""
+    if STRICT_GD_TICKER_RE.match(ticker):
+        return "gd_month_code"
+    for token in STRICT_TICKER_TOKENS:
+        if token in ticker:
+            return f"ticker_contains_{token}"
+    return None
+
+
+def evaluate_candidate(
+    instrument: dict[str, Any],
+    raw: dict[str, Any] | None,
+    cfg: FilterConfig,
+) -> tuple[bool, str]:
+    """Decide whether an instrument is a gold-futures candidate.
+
+    Returns ``(accepted, reason)`` where ``reason`` is one of the accept tags
+    (e.g. ``gd_month_code``, ``name_matches_gold``) when accepted, or one of
+    :data:`REJECT_CATEGORIES` when rejected.
+    """
+    ticker = (instrument.get("ticker") or "").strip().upper()
+    class_code = (instrument.get("classCode") or "").strip().upper()
+
+    if not ticker:
+        return False, "missing_ticker"
+    if not class_code:
+        return False, "missing_classCode"
+
+    inst_type = (
+        instrument.get("instrumentType") or instrument.get("type") or ""
+    ).strip().upper()
+    if inst_type == "GOODS" and not cfg.include_goods:
+        return False, "goods_excluded"
+
+    if cfg.moex_only and cfg.class_code and class_code != cfg.class_code.upper():
+        return False, "classCode_not_allowed"
+
+    # Strong ticker check.
+    ticker_reason = _strong_ticker_match(ticker)
+    if ticker_reason:
+        return True, ticker_reason
+
+    # Strong name check — also rescues AU-prefixed tickers that explicitly
+    # name gold in their display/short name.
+    raw_name = (raw or {}).get("name") if isinstance(raw, dict) else None
+    name_match = _name_matches_gold(
+        instrument.get("displayName"),
+        instrument.get("shortName"),
+        raw_name,
+    )
+    if name_match:
+        return True, f"name_matches_{name_match.lower()}"
+
+    # In relaxed mode (--no-strict), permit weaker ticker substrings only when
+    # the instrument is on the MOEX futures classCode. We still never accept
+    # bare ``AU`` substrings (that is the exact false-positive we are fixing).
+    if not cfg.strict and class_code == cfg.class_code.upper():
+        for token in ("GLDRUBF",):  # explicit relaxed tokens, easy to extend
+            if token in ticker:
+                return True, f"relaxed_ticker_contains_{token}"
+
+    return False, "weak_gold_match"
+
+
+# ---------------------------------------------------------------------------
+# Candidate model
 # ---------------------------------------------------------------------------
 
 
@@ -107,55 +216,18 @@ class Candidate:
     match_reason: str = ""
 
 
-def _str_contains_any(value: str | None, tokens: tuple[str, ...]) -> str | None:
-    if not value:
-        return None
-    upper = value.upper()
-    for token in tokens:
-        if token in upper:
-            return token
-    return None
+@dataclass
+class RejectedRow:
+    ticker: str | None
+    classCode: str | None
+    displayName: str | None
+    shortName: str | None
+    instrumentType: str | None
+    source: str
+    rejection_reason: str
 
 
-def _name_matches_gold(value: str | None) -> str | None:
-    if not value:
-        return None
-    for pattern in GOLD_NAME_PATTERNS:
-        m = pattern.search(value)
-        if m:
-            return m.group(0)
-    return None
-
-
-def _looks_like_gold(instrument: dict[str, Any], raw: dict[str, Any] | None) -> str | None:
-    """Return a short human-readable reason or None."""
-    ticker = instrument.get("ticker")
-    base_asset = None
-    if isinstance(raw, dict):
-        for key in ("baseAssetTicker", "underlyingTicker", "baseAsset", "underlying", "asset"):
-            value = raw.get(key)
-            if isinstance(value, str) and value.strip():
-                base_asset = value.strip().upper()
-                break
-
-    hit = _str_contains_any(ticker, GOLD_TICKER_TOKENS)
-    if hit:
-        return f"ticker contains {hit}"
-    if base_asset:
-        ba_hit = _str_contains_any(base_asset, GOLD_TICKER_TOKENS)
-        if ba_hit:
-            return f"baseAssetTicker contains {ba_hit}"
-
-    name_hit = _name_matches_gold(instrument.get("displayName")) or _name_matches_gold(
-        instrument.get("shortName")
-    )
-    if name_hit:
-        return f"name contains {name_hit!r}"
-
-    return None
-
-
-def _pick_date(raw: dict[str, Any] | None, keys: tuple[str, ...]) -> str | None:
+def _pick_iso_date(raw: dict[str, Any] | None, keys: tuple[str, ...]) -> str | None:
     if not isinstance(raw, dict):
         return None
     for key in keys:
@@ -182,7 +254,7 @@ def _pick_base_asset(raw: dict[str, Any] | None) -> str | None:
     return None
 
 
-def to_candidate(
+def _to_candidate(
     instrument: dict[str, Any],
     *,
     source: str,
@@ -199,9 +271,9 @@ def to_candidate(
         shortName=instrument.get("shortName"),
         instrumentType=instrument.get("instrumentType") or instrument.get("type"),
         baseAssetTicker=_pick_base_asset(raw),
-        maturityDate=_pick_date(raw, ("maturityDate", "maturity", "expirationDate")),
-        expirationDate=_pick_date(raw, ("expirationDate", "expireDate", "expiry")),
-        settlementDate=_pick_date(raw, ("settlementDate", "settlement")),
+        maturityDate=_pick_iso_date(raw, ("maturityDate", "maturity")),
+        expirationDate=_pick_iso_date(raw, ("expirationDate", "expireDate", "expiry")),
+        settlementDate=_pick_iso_date(raw, ("settlementDate", "settlement")),
         tradingCurrency=instrument.get("tradingCurrency"),
         lotSize=instrument.get("lotSize"),
         minimumStep=instrument.get("minimumStep"),
@@ -211,23 +283,21 @@ def to_candidate(
     )
 
 
-def filter_gold(
-    instruments: list[dict[str, Any]],
+def _to_rejected(
+    instrument: dict[str, Any],
     *,
     source: str,
-) -> list[Candidate]:
-    """Keep only plausible gold instruments."""
-    candidates: list[Candidate] = []
-    for inst in instruments:
-        raw = inst.get("raw") if isinstance(inst.get("raw"), dict) else None
-        reason = _looks_like_gold(inst, raw)
-        if not reason:
-            continue
-        cand = to_candidate(inst, source=source, match_reason=reason)
-        if cand is None:
-            continue
-        candidates.append(cand)
-    return candidates
+    reason: str,
+) -> RejectedRow:
+    return RejectedRow(
+        ticker=instrument.get("ticker"),
+        classCode=instrument.get("classCode"),
+        displayName=instrument.get("displayName"),
+        shortName=instrument.get("shortName"),
+        instrumentType=instrument.get("instrumentType") or instrument.get("type"),
+        source=source,
+        rejection_reason=reason,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -235,10 +305,44 @@ def filter_gold(
 # ---------------------------------------------------------------------------
 
 
-def _dedupe(candidates: list[Candidate]) -> list[Candidate]:
+@dataclass
+class DiscoveryResult:
+    accepted: list[Candidate]
+    rejected: list[RejectedRow]
+    rejection_summary: dict[str, int]
+    sources: list[dict[str, Any]]
+    total_raw: int
+    filter_config: FilterConfig
+
+
+def _classify(
+    instruments: list[dict[str, Any]],
+    *,
+    source: str,
+    cfg: FilterConfig,
+    accepted: list[Candidate],
+    rejected: list[RejectedRow],
+    rejection_counter: Counter[str],
+) -> None:
+    for inst in instruments:
+        raw = inst.get("raw") if isinstance(inst.get("raw"), dict) else None
+        ok, reason = evaluate_candidate(inst, raw, cfg)
+        if ok:
+            cand = _to_candidate(inst, source=source, match_reason=reason)
+            if cand is not None:
+                accepted.append(cand)
+            else:
+                rejection_counter["missing_ticker"] += 1
+                rejected.append(_to_rejected(inst, source=source, reason="missing_ticker"))
+        else:
+            rejection_counter[reason] += 1
+            rejected.append(_to_rejected(inst, source=source, reason=reason))
+
+
+def _dedupe_accepted(accepted: list[Candidate]) -> list[Candidate]:
     seen: set[tuple[str, str | None]] = set()
     out: list[Candidate] = []
-    for c in candidates:
+    for c in accepted:
         key = (c.ticker.upper(), (c.classCode or "").upper() or None)
         if key in seen:
             continue
@@ -248,19 +352,22 @@ def _dedupe(candidates: list[Candidate]) -> list[Candidate]:
 
 
 def discover(
+    cfg: FilterConfig,
     *,
-    include_goods_fallback: bool = True,
     probe_base_asset: bool = True,
     page_size: int = 50,
     max_pages: int = 200,
-) -> tuple[list[Candidate], list[dict[str, Any]]]:
-    """Run discovery against BCS. Returns (candidates, source_log)."""
+    max_candidates: int = 0,
+) -> DiscoveryResult:
+    """Run discovery against BCS using the supplied filter configuration."""
     access_token = get_access_token()
 
     sources_used: list[dict[str, Any]] = []
-    candidates: list[Candidate] = []
+    accepted: list[Candidate] = []
+    rejected: list[RejectedRow] = []
+    rejection_counter: Counter[str] = Counter({k: 0 for k in REJECT_CATEGORIES})
+    total_raw = 0
 
-    # Primary: FUTURES type with include_raw so we see maturity/baseAsset fields.
     futures_result = fetch_instruments_by_type(
         access_token,
         instrument_type="FUTURES",
@@ -269,6 +376,7 @@ def discover(
         include_raw=True,
         page_size_param=BCS_INSTRUMENTS_BY_TYPE_SIZE_PARAM,
     )
+    total_raw += len(futures_result.instruments)
     sources_used.append(
         {
             "endpoint": futures_result.endpoint_url,
@@ -278,10 +386,16 @@ def discover(
             "truncated": futures_result.truncated,
         }
     )
-    candidates.extend(filter_gold(futures_result.instruments, source="by-type:FUTURES"))
+    _classify(
+        futures_result.instruments,
+        source="by-type:FUTURES",
+        cfg=cfg,
+        accepted=accepted,
+        rejected=rejected,
+        rejection_counter=rejection_counter,
+    )
 
-    # Optional: GOODS fallback (BCS sometimes mis-classifies)
-    if include_goods_fallback:
+    if cfg.include_goods:
         try:
             goods_result = fetch_instruments_by_type(
                 access_token,
@@ -291,6 +405,7 @@ def discover(
                 include_raw=True,
                 page_size_param=BCS_INSTRUMENTS_BY_TYPE_SIZE_PARAM,
             )
+            total_raw += len(goods_result.instruments)
             sources_used.append(
                 {
                     "endpoint": goods_result.endpoint_url,
@@ -300,7 +415,14 @@ def discover(
                     "truncated": goods_result.truncated,
                 }
             )
-            candidates.extend(filter_gold(goods_result.instruments, source="by-type:GOODS"))
+            _classify(
+                goods_result.instruments,
+                source="by-type:GOODS",
+                cfg=cfg,
+                accepted=accepted,
+                rejected=rejected,
+                rejection_counter=rejection_counter,
+            )
         except BcsError as exc:
             sources_used.append(
                 {
@@ -309,9 +431,6 @@ def discover(
                 }
             )
 
-    # Optional: baseAssetTicker probe. BCS docs document
-    # by-type-and-base-asset-ticker; in practice the same endpoint accepts the
-    # extra query parameter, so we re-use it and merge results.
     if probe_base_asset:
         for base_ticker in DEFAULT_BASE_ASSET_PROBES:
             try:
@@ -324,6 +443,7 @@ def discover(
                     include_raw=True,
                     page_size_param=BCS_INSTRUMENTS_BY_TYPE_SIZE_PARAM,
                 )
+                total_raw += len(probe.instruments)
                 sources_used.append(
                     {
                         "endpoint": probe.endpoint_url,
@@ -337,17 +457,15 @@ def discover(
                         "truncated": probe.truncated,
                     }
                 )
-                # Anything returned for a gold base asset is by definition a hit.
-                for inst in probe.instruments:
-                    cand = to_candidate(
-                        inst,
-                        source=f"by-type:FUTURES?baseAssetTicker={base_ticker}",
-                        match_reason=f"baseAssetTicker probe matched {base_ticker}",
-                    )
-                    if cand is not None:
-                        candidates.append(cand)
+                _classify(
+                    probe.instruments,
+                    source=f"by-type:FUTURES?baseAssetTicker={base_ticker}",
+                    cfg=cfg,
+                    accepted=accepted,
+                    rejected=rejected,
+                    rejection_counter=rejection_counter,
+                )
             except ValueError:
-                # fetch_instruments_by_type validates inputs; ignore probe-specific complaints.
                 continue
             except BcsError as exc:
                 sources_used.append(
@@ -358,7 +476,18 @@ def discover(
                     }
                 )
 
-    return _dedupe(candidates), sources_used
+    accepted = _dedupe_accepted(accepted)
+    if max_candidates and max_candidates > 0:
+        accepted = accepted[:max_candidates]
+
+    return DiscoveryResult(
+        accepted=accepted,
+        rejected=rejected,
+        rejection_summary=dict(rejection_counter),
+        sources=sources_used,
+        total_raw=total_raw,
+        filter_config=cfg,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -386,40 +515,71 @@ def _candidate_to_dict(c: Candidate) -> dict[str, Any]:
     }
 
 
-def write_outputs(
-    candidates: list[Candidate],
-    sources_used: list[dict[str, Any]],
-) -> tuple[Path, Path]:
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def write_outputs(result: DiscoveryResult) -> tuple[Path, Path, Path]:
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     json_path = REPORT_DIR / "gold_futures_discovery.json"
     csv_path = REPORT_DIR / "gold_futures_discovery.csv"
+    rejected_path = REPORT_DIR / "gold_futures_discovery_rejected.csv"
 
     payload = {
         "generatedAt": utc_now_iso(),
-        "totalCandidates": len(candidates),
-        "sources": sources_used,
-        "candidates": [_candidate_to_dict(c) for c in candidates],
+        "filter": {
+            "moex_only": result.filter_config.moex_only,
+            "class_code": result.filter_config.class_code,
+            "strict": result.filter_config.strict,
+            "include_goods": result.filter_config.include_goods,
+        },
+        "totalRaw": result.total_raw,
+        "totalAccepted": len(result.accepted),
+        "totalRejected": len(result.rejected),
+        "rejectionSummary": result.rejection_summary,
+        "sources": result.sources,
+        "candidates": [_candidate_to_dict(c) for c in result.accepted],
     }
     json_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=False) + "\n",
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
 
-    fieldnames = [
+    accepted_fieldnames = [
         "ticker", "classCode", "displayName", "shortName", "instrumentType",
         "baseAssetTicker", "maturityDate", "expirationDate", "settlementDate",
         "tradingCurrency", "lotSize", "minimumStep", "boards", "source",
         "match_reason",
     ]
     with csv_path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=accepted_fieldnames)
         writer.writeheader()
-        for c in candidates:
+        for c in result.accepted:
             row = _candidate_to_dict(c)
             row["boards"] = json.dumps(row["boards"], ensure_ascii=False)
             writer.writerow(row)
 
-    return json_path, csv_path
+    rejected_fieldnames = [
+        "ticker", "classCode", "displayName", "shortName", "instrumentType",
+        "source", "rejection_reason",
+    ]
+    with rejected_path.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=rejected_fieldnames)
+        writer.writeheader()
+        for r in result.rejected:
+            writer.writerow(
+                {
+                    "ticker": r.ticker,
+                    "classCode": r.classCode,
+                    "displayName": r.displayName,
+                    "shortName": r.shortName,
+                    "instrumentType": r.instrumentType,
+                    "source": r.source,
+                    "rejection_reason": r.rejection_reason,
+                }
+            )
+
+    return json_path, csv_path, rejected_path
 
 
 # ---------------------------------------------------------------------------
@@ -428,13 +588,60 @@ def write_outputs(
 
 
 def build_argparser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Discover gold futures candidates on BCS.")
-    p.add_argument("--page-size", type=int, default=50, help="BCS page size (default: 50).")
-    p.add_argument("--max-pages", type=int, default=200, help="Pagination safety cap.")
+    p = argparse.ArgumentParser(description="Discover gold futures candidates on BCS (strict by default).")
     p.add_argument(
-        "--skip-goods",
+        "--class-code",
+        default=DEFAULT_CLASS_CODE,
+        help=f"Required classCode when --moex-only is on (default: {DEFAULT_CLASS_CODE}).",
+    )
+    p.add_argument(
+        "--moex-only",
+        dest="moex_only",
         action="store_true",
-        help="Skip the GOODS fallback (only query FUTURES).",
+        default=True,
+        help="Only accept candidates whose classCode matches --class-code (default).",
+    )
+    p.add_argument(
+        "--no-moex-only",
+        dest="moex_only",
+        action="store_false",
+        help="Disable the classCode restriction.",
+    )
+    p.add_argument(
+        "--strict",
+        dest="strict",
+        action="store_true",
+        default=True,
+        help="Strict gold filter — bare AU substring rejected (default).",
+    )
+    p.add_argument(
+        "--no-strict",
+        dest="strict",
+        action="store_false",
+        help="Relaxed filter — still rejects bare AU but allows softer tokens like GLDRUBF.",
+    )
+    p.add_argument(
+        "--include-goods",
+        action="store_true",
+        help="Also accept GOODS-typed instruments (default: skip GOODS).",
+    )
+    p.add_argument(
+        "--max-candidates",
+        type=int,
+        default=0,
+        help="If > 0, cap accepted candidates to the first N after deduplication.",
+    )
+    p.add_argument(
+        "--page-size",
+        type=int,
+        default=50,
+        help="BCS page size (default: 50).",
+    )
+    p.add_argument(
+        "--max-pages",
+        type=int,
+        default=200,
+        help="Pagination safety cap (default: 200).",
     )
     p.add_argument(
         "--skip-base-asset-probe",
@@ -451,28 +658,50 @@ def main(argv: list[str] | None = None) -> int:
         print("BCS_REFRESH_TOKEN env var is not set.", file=sys.stderr)
         return 2
 
+    cfg = FilterConfig(
+        moex_only=args.moex_only,
+        class_code=args.class_code.upper(),
+        strict=args.strict,
+        include_goods=args.include_goods,
+    )
+
     try:
-        candidates, sources = discover(
-            include_goods_fallback=not args.skip_goods,
+        result = discover(
+            cfg,
             probe_base_asset=not args.skip_base_asset_probe,
             page_size=args.page_size,
             max_pages=args.max_pages,
+            max_candidates=args.max_candidates,
         )
     except BcsError as exc:
         print(f"BCS discovery failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 3
 
-    json_path, csv_path = write_outputs(candidates, sources)
-    print(f"[discover-gold-futures] candidates: {len(candidates)}")
-    for c in candidates[:20]:
+    json_path, csv_path, rejected_path = write_outputs(result)
+
+    print(
+        "[discover-gold-futures] filter "
+        f"strict={cfg.strict} moex_only={cfg.moex_only} "
+        f"class_code={cfg.class_code} include_goods={cfg.include_goods}"
+    )
+    print(
+        f"[discover-gold-futures] raw={result.total_raw} "
+        f"accepted={len(result.accepted)} rejected={len(result.rejected)}"
+    )
+    if result.rejection_summary:
+        non_zero = {k: v for k, v in result.rejection_summary.items() if v}
+        if non_zero:
+            print(f"[discover-gold-futures] rejection summary: {non_zero}")
+    for c in result.accepted[:20]:
         print(
-            f"  - {c.ticker:<14} class={c.classCode or '?':<10} "
+            f"  + {c.ticker:<14} class={c.classCode or '?':<10} "
             f"type={c.instrumentType or '?':<10} {c.match_reason}"
         )
-    if len(candidates) > 20:
-        print(f"  ... ({len(candidates) - 20} more)")
+    if len(result.accepted) > 20:
+        print(f"  ... ({len(result.accepted) - 20} more)")
     print(f"[discover-gold-futures] wrote {json_path.relative_to(_REPO_ROOT)}")
     print(f"[discover-gold-futures] wrote {csv_path.relative_to(_REPO_ROOT)}")
+    print(f"[discover-gold-futures] wrote {rejected_path.relative_to(_REPO_ROOT)}")
     return 0
 
 

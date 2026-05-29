@@ -823,11 +823,52 @@ each one, stitches them into a continuous series, and backtests SuperTrend
 on the stitched CSV. Discovery, availability, and continuous-summary
 reports land in `ml/reports/strategies/` (gitignored).
 
-```bash
-# A. Discover gold futures candidates on BCS (FUTURES + GOODS fallback).
-python ml\strategies\discover_gold_futures.py
+#### Strict gold filter (default)
 
-# B. Probe candle availability for each candidate (no raw CSV saved).
+`SPBFUT` is the BCS classCode that maps to **Moscow Exchange futures**, so
+the default filter restricts discovery to that classCode and then keeps only
+tickers that strongly indicate gold:
+
+| Strong ticker pattern | Examples |
+|-----------------------|----------|
+| `GD<month-code><year>` (BCS futures month codes F/G/H/J/K/M/N/Q/U/V/X/Z) | `GDH7`, `GDM6`, `GDU6`, `GDZ6` |
+| ticker contains `GLD` / `GOLD` / `GOLDRUB` | `GLDRUBF`, `GOLDRUBF` |
+| displayName / shortName contains `gold` / `goldrub` / `золото` | gold futures with name-only match |
+
+A bare `AU` substring is **not** enough on its own. Earlier runs returned
+hundreds of unrelated contracts (e.g. `92M6`, `95M6`, `AAM6`, `AAU6`) by
+matching `AU` everywhere in the universe. Those are now rejected with
+`weak_gold_match` and listed in
+`ml/reports/strategies/gold_futures_discovery_rejected.csv` for diagnostics.
+
+The discovery JSON also exposes a rejection summary so you can see why each
+non-gold instrument was dropped:
+
+```json
+{
+  "filter": {"moex_only": true, "class_code": "SPBFUT", "strict": true, "include_goods": false},
+  "totalAccepted": 12,
+  "totalRejected": 433,
+  "rejectionSummary": {
+    "classCode_not_allowed": 0,
+    "weak_gold_match": 433,
+    "goods_excluded": 0,
+    "missing_ticker": 0,
+    "missing_classCode": 0
+  }
+}
+```
+
+#### Default flow
+
+```bash
+# A. Discover gold futures candidates on BCS (strict + SPBFUT-only by default).
+python ml\strategies\discover_gold_futures.py --strict --class-code SPBFUT
+
+# B. Probe candle availability for the accepted candidates.
+#    Reads ml/reports/strategies/gold_futures_discovery.csv by default and
+#    re-applies the strict gold filter so a stale CSV cannot reintroduce
+#    non-gold rows. Warns if more than 50 candidates load.
 python ml\strategies\scan_gold_futures_availability.py
 
 # C. Download per-contract OHLC for the candidates that have data.
@@ -845,11 +886,51 @@ python ml\strategies\backtest_supertrend.py \
     --output-prefix supertrend_gold_fut_continuous_m15
 ```
 
+#### Manual focused scan
+
+When BCS surfaces unexpected tickers or you already know the contracts you
+want, skip discovery entirely and pass the tickers directly:
+
+```bash
+python ml\strategies\scan_gold_futures_availability.py ^
+    --tickers GDH7 GDM6 GDU6 GDZ6 GLDRUBF --class-code SPBFUT
+```
+
+This bypasses the discovery CSV and probes exactly the tickers you list,
+each on the supplied classCode.
+
+#### Discovery / scanner flag reference
+
+`discover_gold_futures.py`
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `--class-code SPBFUT` | `SPBFUT` | classCode required when `--moex-only` is on |
+| `--moex-only` / `--no-moex-only` | on | enforce the classCode restriction |
+| `--strict` / `--no-strict` | on | enforce the strong gold filter (bare AU still rejected) |
+| `--include-goods` | off | also scan the GOODS instrument type |
+| `--max-candidates N` | 0 | optional cap on accepted candidates |
+| `--skip-base-asset-probe` | off | skip the GOLD/GLD/AU baseAssetTicker probe |
+
+`scan_gold_futures_availability.py`
+
+| Flag | Default | Effect |
+|------|---------|--------|
+| `--class-code SPBFUT` | `SPBFUT` | classCode for `--tickers` and strict re-filtering |
+| `--tickers T1 T2 ...` | unset | manual override; bypasses the discovery CSV |
+| `--input <CSV>` | `ml/reports/strategies/gold_futures_discovery.csv` | input CSV |
+| `--strict` / `--no-strict` | on | re-apply the strict gold filter when loading the CSV |
+| `--timeframes M5 M15 H1 H4 D` | all five | which timeframes to probe |
+| `--max-candidates N` | 0 | cap loaded candidates |
+| `--skip-from-2024` | off | drop the 2024-01-01 wide-range probe |
+
 `build_continuous_gold_futures.py` writes an **unadjusted** concatenation;
 the summary JSON includes the explicit warning
 `"This is an unadjusted continuous futures series. Roll gaps may affect
 indicators and backtest results."` Treat backtests on it as exploratory
-until a back-adjusted variant is added.
+until a back-adjusted variant is added. Maturity parsing now understands
+BCS month-code tickers (`GDH7` → March 2027, `GDZ6` → December 2026, etc.)
+so contracts sort correctly when explicit `maturityDate` is missing.
 
 `download_bcs_contract_history.py` is a generalisation of
 `download_bcs_goods_history.py`. It accepts any `--ticker` + `--class-code`

@@ -1,10 +1,16 @@
 """
-Scan candle availability for discovered gold futures candidates.
+Scan candle availability for accepted gold futures candidates.
 
-For every candidate in ``ml/reports/strategies/gold_futures_discovery.json``
-this script probes the BCS candles endpoint over a small grid of timeframes
-and date ranges, and records how many bars came back. It does NOT save raw
-candle CSV — that is the job of ``download_bcs_contract_history.py``.
+Inputs (in order of precedence)
+-------------------------------
+1. ``--tickers T1 T2 ...``  (with --class-code) — explicit manual override.
+2. ``--input <CSV>`` (default ``ml/reports/strategies/gold_futures_discovery.csv``)
+   — the accepted-only CSV produced by ``discover_gold_futures.py``.
+
+By default only Moscow Exchange (BCS classCode ``SPBFUT``) gold-related
+contracts are scanned. The strict gold filter from
+``discover_gold_futures.py`` is re-applied on the loaded rows so a stale
+CSV cannot reintroduce non-gold candidates.
 
 Auth
 ----
@@ -32,12 +38,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-# Allow running as a script.
 _THIS_FILE = Path(__file__).resolve()
 _REPO_ROOT = _THIS_FILE.parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from ml.strategies.discover_gold_futures import (  # noqa: E402
+    DEFAULT_CLASS_CODE,
+    FilterConfig,
+    evaluate_candidate,
+)
 from ml.strategies.download_bcs_goods_history import (  # noqa: E402
     BcsAuthError,
     BcsDownloadError,
@@ -48,11 +58,12 @@ from ml.strategies.download_bcs_goods_history import (  # noqa: E402
 )
 
 
-DISCOVERY_PATH = _REPO_ROOT / "ml" / "reports" / "strategies" / "gold_futures_discovery.json"
 REPORT_DIR = _REPO_ROOT / "ml" / "reports" / "strategies"
+DISCOVERY_CSV_PATH = REPORT_DIR / "gold_futures_discovery.csv"
 
 DEFAULT_TIMEFRAMES = ("M5", "M15", "H1", "H4", "D")
-INTER_REQUEST_DELAY = 0.4  # seconds; matches the polite delay used elsewhere.
+INTER_REQUEST_DELAY = 0.4
+LARGE_CANDIDATE_WARNING_THRESHOLD = 50
 
 
 @dataclass
@@ -100,26 +111,59 @@ def default_ranges(now: datetime | None = None, from_2024: bool = True) -> list[
     return ranges
 
 
-def _load_candidates(path: Path) -> list[dict[str, Any]]:
+# ---------------------------------------------------------------------------
+# Loading candidates
+# ---------------------------------------------------------------------------
+
+
+def load_candidates_csv(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         raise FileNotFoundError(
-            f"Discovery file not found at {path}. "
+            f"Discovery CSV not found at {path}. "
             "Run `python ml/strategies/discover_gold_futures.py` first."
         )
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    candidates = payload.get("candidates")
-    if not isinstance(candidates, list):
-        raise ValueError(f"{path} does not contain a 'candidates' list.")
-    return [c for c in candidates if isinstance(c, dict) and c.get("ticker")]
+    candidates: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            ticker = (row.get("ticker") or "").strip().upper()
+            class_code = (row.get("classCode") or "").strip().upper()
+            if not ticker or not class_code:
+                continue
+            candidates.append(
+                {
+                    "ticker": ticker,
+                    "classCode": class_code,
+                    "displayName": (row.get("displayName") or "").strip() or None,
+                    "shortName": (row.get("shortName") or "").strip() or None,
+                    "instrumentType": (row.get("instrumentType") or "").strip() or None,
+                }
+            )
+    return candidates
+
+
+def candidates_from_tickers(tickers: list[str], class_code: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    cc = (class_code or "").strip().upper()
+    for raw_t in tickers:
+        t = (raw_t or "").strip().upper()
+        if not t or not cc:
+            continue
+        key = (t, cc)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"ticker": t, "classCode": cc})
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Range / timeframe limits
+# ---------------------------------------------------------------------------
 
 
 def _allowed_timeframes_for_range(range_name: str, timeframes: tuple[str, ...]) -> list[str]:
-    """Filter out impractical timeframe/range combos.
-
-    A 7-day window with daily candles is fine; a multi-year window with M5 is
-    not — it would take hundreds of HTTP calls per ticker. Keep intraday
-    ranges short and broad ranges coarse.
-    """
     if range_name in ("last_7d", "last_30d"):
         return list(timeframes)
     if range_name == "last_90d":
@@ -172,7 +216,7 @@ def scan_candidate(
                 row.status = "auth_error"
                 row.error = type(exc).__name__
                 rows.append(row)
-                return rows  # token broken; stop trying.
+                return rows
             except BcsHttpError as exc:
                 row.status = "http_error"
                 row.error = type(exc).__name__
@@ -183,7 +227,7 @@ def scan_candidate(
                 row.error = type(exc).__name__
                 rows.append(row)
                 continue
-            except Exception as exc:  # defensive: never crash the whole scan.
+            except Exception as exc:  # defensive
                 row.status = "error"
                 row.error = type(exc).__name__
                 rows.append(row)
@@ -226,12 +270,41 @@ def write_outputs(rows: list[AvailabilityRow]) -> tuple[Path, Path]:
     return json_path, csv_path
 
 
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
 def build_argparser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Probe BCS candle availability for discovered gold futures.")
+    p = argparse.ArgumentParser(description="Probe BCS candle availability for accepted gold futures.")
     p.add_argument(
         "--input",
-        default=str(DISCOVERY_PATH),
-        help="Discovery JSON produced by discover_gold_futures.py.",
+        default=str(DISCOVERY_CSV_PATH),
+        help="Accepted-only discovery CSV from discover_gold_futures.py.",
+    )
+    p.add_argument(
+        "--class-code",
+        default=DEFAULT_CLASS_CODE,
+        help=f"classCode used when --tickers is given or for strict re-filtering (default: {DEFAULT_CLASS_CODE}).",
+    )
+    p.add_argument(
+        "--tickers",
+        nargs="+",
+        default=None,
+        help="Explicit ticker list. Overrides --input; uses --class-code for each.",
+    )
+    p.add_argument(
+        "--strict",
+        dest="strict",
+        action="store_true",
+        default=True,
+        help="Re-apply the strict gold filter on loaded candidates (default).",
+    )
+    p.add_argument(
+        "--no-strict",
+        dest="strict",
+        action="store_false",
+        help="Skip the strict re-filter when reading the CSV.",
     )
     p.add_argument(
         "--timeframes",
@@ -248,7 +321,7 @@ def build_argparser() -> argparse.ArgumentParser:
         "--max-candidates",
         type=int,
         default=0,
-        help="If > 0, only probe the first N candidates (useful for smoke tests).",
+        help="If > 0, only probe the first N candidates.",
     )
     p.add_argument(
         "--delay",
@@ -259,6 +332,21 @@ def build_argparser() -> argparse.ArgumentParser:
     return p
 
 
+def _apply_strict_filter(
+    candidates: list[dict[str, Any]],
+    cfg: FilterConfig,
+) -> tuple[list[dict[str, Any]], list[tuple[dict[str, Any], str]]]:
+    accepted: list[dict[str, Any]] = []
+    rejected: list[tuple[dict[str, Any], str]] = []
+    for inst in candidates:
+        ok, reason = evaluate_candidate(inst, raw=None, cfg=cfg)
+        if ok:
+            accepted.append(inst)
+        else:
+            rejected.append((inst, reason))
+    return accepted, rejected
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_argparser().parse_args(argv)
     refresh_token = os.getenv("BCS_REFRESH_TOKEN", "").strip()
@@ -267,14 +355,55 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     client_id = os.getenv("BCS_CLIENT_ID", DEFAULT_CLIENT_ID).strip() or DEFAULT_CLIENT_ID
 
-    try:
-        candidates = _load_candidates(Path(args.input))
-    except (FileNotFoundError, ValueError) as exc:
-        print(f"[scan-gold-futures] cannot load discovery: {exc}", file=sys.stderr)
-        return 4
+    class_code = (args.class_code or DEFAULT_CLASS_CODE).strip().upper()
+
+    if args.tickers:
+        candidates = candidates_from_tickers(args.tickers, class_code)
+        source_label = f"manual:{len(args.tickers)} tickers"
+    else:
+        try:
+            candidates = load_candidates_csv(Path(args.input))
+        except FileNotFoundError as exc:
+            print(f"[scan-gold-futures] {exc}", file=sys.stderr)
+            return 4
+        source_label = f"csv:{Path(args.input).name}"
+
+    cfg = FilterConfig(
+        moex_only=True,
+        class_code=class_code,
+        strict=True,
+        include_goods=False,
+    )
+
+    if args.strict and not args.tickers:
+        accepted, rejected = _apply_strict_filter(candidates, cfg)
+        if rejected:
+            print(
+                f"[scan-gold-futures] strict re-filter dropped {len(rejected)} "
+                f"row(s) from {source_label}"
+            )
+            preview = rejected[:5]
+            for inst, reason in preview:
+                print(
+                    f"  - {inst.get('ticker')}/{inst.get('classCode')} -> {reason}"
+                )
+            if len(rejected) > 5:
+                print(f"  ... ({len(rejected) - 5} more dropped)")
+        candidates = accepted
 
     if args.max_candidates and args.max_candidates > 0:
         candidates = candidates[: args.max_candidates]
+
+    if len(candidates) > LARGE_CANDIDATE_WARNING_THRESHOLD:
+        print(
+            f"[scan-gold-futures] WARNING: {len(candidates)} candidates loaded "
+            f"(> {LARGE_CANDIDATE_WARNING_THRESHOLD}). "
+            "Too many gold candidates; discovery filter may be too broad."
+        )
+
+    if not candidates:
+        print("[scan-gold-futures] no candidates to scan.", file=sys.stderr)
+        return 5
 
     try:
         access_token = exchange_refresh_token(refresh_token, client_id=client_id)
@@ -285,16 +414,17 @@ def main(argv: list[str] | None = None) -> int:
     ranges = default_ranges(from_2024=not args.skip_from_2024)
     timeframes = tuple(tf.upper() for tf in args.timeframes)
 
-    print(f"[scan-gold-futures] probing {len(candidates)} candidate(s) "
-          f"x {len(timeframes)} timeframe(s) x {len(ranges)} range(s)")
+    print(
+        f"[scan-gold-futures] source={source_label} "
+        f"class_code={class_code} strict={args.strict} "
+        f"probing {len(candidates)} candidate(s) x {len(timeframes)} timeframe(s) "
+        f"x {len(ranges)} range(s)"
+    )
     all_rows: list[AvailabilityRow] = []
     for i, cand in enumerate(candidates, 1):
         ticker = cand.get("ticker")
-        class_code = cand.get("classCode")
-        if not ticker or not class_code:
-            print(f"  ({i}/{len(candidates)}) skip — missing ticker/classCode")
-            continue
-        print(f"  ({i}/{len(candidates)}) {ticker}/{class_code}")
+        cand_class = cand.get("classCode")
+        print(f"  ({i}/{len(candidates)}) {ticker}/{cand_class}")
         rows = scan_candidate(
             access_token,
             cand,

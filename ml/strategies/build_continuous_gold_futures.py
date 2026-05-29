@@ -66,6 +66,13 @@ TIMEFRAME_DELTA_SECONDS = {
 _TICKER_DATE_RE = re.compile(r"(?P<month>\d{1,2})\.(?P<year>\d{2,4})")
 _TICKER_YYMMDD_RE = re.compile(r"(?P<year>20\d{2})[-_]?(?P<month>\d{2})")
 
+# MOEX futures month codes: F=Jan G=Feb H=Mar J=Apr K=May M=Jun
+# N=Jul Q=Aug U=Sep V=Oct X=Nov Z=Dec
+_BCS_MONTH_CODES = "FGHJKMNQUVXZ"
+_TICKER_BCS_MONTH_RE = re.compile(
+    rf"^GD(?P<code>[{_BCS_MONTH_CODES}])(?P<year>\d{{1,2}})$"
+)
+
 
 WARNING_TEXT = (
     "This is an unadjusted continuous futures series. "
@@ -101,7 +108,38 @@ def _parse_iso(value: str | None) -> datetime | None:
     return dt.astimezone(timezone.utc)
 
 
+def _maturity_from_bcs_month_code(
+    ticker: str,
+    now: datetime | None = None,
+) -> datetime | None:
+    """Decode a BCS futures-month-code ticker (e.g. GDH7 -> March 2027)."""
+    m = _TICKER_BCS_MONTH_RE.match(ticker.upper())
+    if not m:
+        return None
+    month = _BCS_MONTH_CODES.index(m.group("code")) + 1
+    year_digits = m.group("year")
+    now = now or datetime.now(timezone.utc)
+    if len(year_digits) == 1:
+        decade = (now.year // 10) * 10
+        year = decade + int(year_digits)
+        # Single-digit codes denote future contracts — if the naive decade
+        # mapping yields a date too far in the past, bump to the next decade.
+        if year < now.year - 1:
+            year += 10
+    else:
+        year = int(year_digits)
+        if year < 100:
+            year += 2000
+    try:
+        return datetime(year, month, 15, tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
 def _maturity_from_ticker(ticker: str) -> datetime | None:
+    bcs = _maturity_from_bcs_month_code(ticker)
+    if bcs is not None:
+        return bcs
     m = _TICKER_DATE_RE.search(ticker)
     if m:
         try:
