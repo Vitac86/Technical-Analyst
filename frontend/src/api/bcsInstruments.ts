@@ -1,4 +1,5 @@
 import { getBcsAccessToken } from './bcsAuth';
+import { hasRefreshToken } from '../security/tokenStorage';
 
 const BCS_INSTRUMENTS_BY_TYPE_URL =
   'https://be.broker.ru/trade-api-information-service/api/v1/instruments/by-type';
@@ -8,12 +9,19 @@ const MAX_PAGES = 20;
 
 export type BcsInstrumentType = 'GOODS' | string;
 
+export type BcsInstrumentBoard = {
+  classCode: string;
+  exchange: string;
+};
+
 export type BcsInstrument = {
   source: 'bcs';
   secid: string;
   ticker: string;
   boardid: string;
   classCode: string;
+  primaryBoard: string;
+  boards: BcsInstrumentBoard[];
   shortname: string;
   name: string;
   displayName: string;
@@ -24,6 +32,63 @@ export type BcsInstrument = {
   minimumStep?: number;
   assetGroup?: 'goods' | 'stock' | 'fx' | 'unknown';
 };
+
+export type BcsInstrumentsLoadStatus = 'live' | 'merged' | 'fallback' | 'fallback_error';
+
+export type BcsInstrumentsLoadResult = {
+  instruments: BcsInstrument[];
+  status: BcsInstrumentsLoadStatus;
+};
+
+// Last status seen for diagnostics in the UI. Updated only by loadBcsGoodsInstruments.
+let _lastGoodsStatus: BcsInstrumentsLoadStatus = 'fallback';
+
+export function getLastGoodsLoadStatus(): BcsInstrumentsLoadStatus {
+  return _lastGoodsStatus;
+}
+
+// ---------------------------------------------------------------------------
+// Static fallback list — confirmed offline via ml/data/instruments/bcs_GOODS.json
+// Contains instrument metadata only. No tokens, candles, orderbook, or prices.
+// Safe to commit.
+// ---------------------------------------------------------------------------
+
+function buildStaticGoods(
+  ticker: string,
+  classCode: string,
+  displayName: string,
+): BcsInstrument {
+  return {
+    source: 'bcs',
+    secid: ticker,
+    ticker,
+    boardid: classCode,
+    classCode,
+    primaryBoard: classCode,
+    boards: [{ classCode, exchange: 'MOEX' }],
+    shortname: displayName,
+    name: displayName,
+    displayName,
+    instrumentType: 'GOODS',
+    assetGroup: 'goods',
+  };
+}
+
+export const STATIC_BCS_GOODS_INSTRUMENTS: BcsInstrument[] = [
+  buildStaticGoods('AL3M',         'FEM', 'Алюминий'),
+  buildStaticGoods('BRENT0826',    'FEG', 'Нефть BRENT'),
+  buildStaticGoods('COPPER3M',     'FEM', 'Медь'),
+  buildStaticGoods('ETH',          'FEV', 'ETH'),
+  buildStaticGoods('GOLD',         'FEG', 'Золото'),
+  buildStaticGoods('LCROIL0726NY', 'FEG', 'Нефть WTI'),
+  buildStaticGoods('NGAS0726',     'FEG', 'Природный газ'),
+  buildStaticGoods('NICKEL3M',     'FEM', 'Никель'),
+  buildStaticGoods('PALLAD',       'FEG', 'Палладий'),
+  buildStaticGoods('PLATINUM',     'FEG', 'Платина'),
+  buildStaticGoods('SILVER',       'FEG', 'Серебро'),
+  buildStaticGoods('XBT',          'FEV', 'XBT'),
+  buildStaticGoods('ZINC3M',       'FEM', 'Цинк'),
+];
 
 const cache = new Map<string, BcsInstrument[]>();
 const inFlight = new Map<string, Promise<BcsInstrument[]>>();
@@ -68,6 +133,21 @@ function readNumber(row: Record<string, unknown>, keys: string[]): number | unde
   return undefined;
 }
 
+function readBoards(row: Record<string, unknown>): BcsInstrumentBoard[] {
+  const raw = readValue(row, ['boards', 'boardList']);
+  if (!Array.isArray(raw)) return [];
+
+  const result: BcsInstrumentBoard[] = [];
+  for (const item of raw) {
+    const r = asRecord(item);
+    if (!r) continue;
+    const classCode = readString(r, ['classCode', 'class_code', 'board', 'boardId']);
+    const exchange  = readString(r, ['exchange', 'exchangeCode']) ?? 'MOEX';
+    if (classCode) result.push({ classCode, exchange });
+  }
+  return result;
+}
+
 function assetGroupForType(type: BcsInstrumentType, row: Record<string, unknown>): BcsInstrument['assetGroup'] {
   const rawGroup = readString(row, ['assetGroup', 'asset_group', 'group']);
   const normalizedGroup = rawGroup?.toLowerCase();
@@ -95,6 +175,7 @@ function normalizeInstrument(
     'symbol',
     'code',
   ]);
+  const primaryBoard = readString(row, ['primaryBoard', 'primary_board']);
   const classCode = readString(row, [
     'classCode',
     'class_code',
@@ -102,7 +183,7 @@ function normalizeInstrument(
     'boardId',
     'board',
     'marketCode',
-  ]);
+  ]) ?? primaryBoard;
 
   if (!ticker || !classCode) return null;
 
@@ -113,12 +194,17 @@ function normalizeInstrument(
   const instrumentType =
     readString(row, ['instrumentType', 'instrument_type', 'type', 'kind']) ?? type;
 
+  const boards = readBoards(row);
+  const finalBoards = boards.length > 0 ? boards : [{ classCode, exchange: 'MOEX' }];
+
   return {
     source: 'bcs',
     secid: ticker,
     ticker,
     boardid: classCode,
     classCode,
+    primaryBoard: primaryBoard ?? classCode,
+    boards: finalBoards,
     shortname,
     name: displayName || shortname,
     displayName: displayName || shortname,
@@ -231,6 +317,62 @@ export function loadBcsInstrumentsByType(type: BcsInstrumentType): Promise<BcsIn
   return request;
 }
 
-export function loadBcsGoodsInstruments(): Promise<BcsInstrument[]> {
-  return loadBcsInstrumentsByType('GOODS');
+// ---------------------------------------------------------------------------
+// GOODS loader with static fallback
+//
+// Behaviour:
+//   - No token         -> static fallback only (status: 'fallback').
+//   - Live ok, count>0 -> merge live + static, live wins on (ticker, classCode)
+//                         (status: 'merged' or 'live' if no extra static added).
+//   - Live ok, count=0 -> static fallback (status: 'fallback').
+//   - Live throws      -> static fallback (status: 'fallback_error').
+//
+// Never throws — search must always be able to surface confirmed GOODS items.
+// ---------------------------------------------------------------------------
+
+function dedupeMerge(
+  live: BcsInstrument[],
+  fallback: BcsInstrument[],
+): { merged: BcsInstrument[]; addedFromFallback: number } {
+  const seen = new Map<string, BcsInstrument>();
+  for (const item of live) {
+    seen.set(`${item.ticker}:${item.classCode}`, item);
+  }
+  let added = 0;
+  for (const item of fallback) {
+    const key = `${item.ticker}:${item.classCode}`;
+    if (!seen.has(key)) {
+      seen.set(key, item);
+      added += 1;
+    }
+  }
+  return { merged: Array.from(seen.values()), addedFromFallback: added };
+}
+
+export async function loadBcsGoodsInstruments(): Promise<BcsInstrument[]> {
+  if (!hasRefreshToken()) {
+    _lastGoodsStatus = 'fallback';
+    return STATIC_BCS_GOODS_INSTRUMENTS.slice();
+  }
+
+  try {
+    const live = await loadBcsInstrumentsByType('GOODS');
+    if (live.length === 0) {
+      _lastGoodsStatus = 'fallback';
+      return STATIC_BCS_GOODS_INSTRUMENTS.slice();
+    }
+    const { merged, addedFromFallback } = dedupeMerge(live, STATIC_BCS_GOODS_INSTRUMENTS);
+    _lastGoodsStatus = addedFromFallback > 0 ? 'merged' : 'live';
+    return merged;
+  } catch {
+    _lastGoodsStatus = 'fallback_error';
+    return STATIC_BCS_GOODS_INSTRUMENTS.slice();
+  }
+}
+
+// Diagnostic variant — surfaces both the result and the load status so
+// callers can show a "fallback list used" hint without an extra round-trip.
+export async function loadBcsGoodsInstrumentsWithStatus(): Promise<BcsInstrumentsLoadResult> {
+  const instruments = await loadBcsGoodsInstruments();
+  return { instruments, status: _lastGoodsStatus };
 }

@@ -1,7 +1,10 @@
 import { searchMoex } from './moexDirect';
 import type { MoexSearchResult } from './moexDirect';
-import { loadBcsGoodsInstruments } from './bcsInstruments';
-import type { BcsInstrument } from './bcsInstruments';
+import {
+  loadBcsGoodsInstrumentsWithStatus,
+  type BcsInstrument,
+  type BcsInstrumentsLoadStatus,
+} from './bcsInstruments';
 import { hasRefreshToken } from '../security/tokenStorage';
 
 export type SourceProvider = 'moex' | 'bcs';
@@ -18,8 +21,11 @@ export type MobileAssetSearchResult = MoexSearchResult & {
 
 export type MobileAssetSearchResponse = {
   results: MobileAssetSearchResult[];
+  bcsResults: MobileAssetSearchResult[];
+  moexResults: MobileAssetSearchResult[];
   bcsTokenRequired: boolean;
-  bcsUnavailable: boolean;
+  bcsFallbackUsed: boolean;
+  bcsLoadStatus: BcsInstrumentsLoadStatus;
 };
 
 function normalizeText(value: string | undefined): string {
@@ -74,77 +80,103 @@ function matchesBcsInstrument(instrument: BcsInstrument, query: string): boolean
   return haystack.some(value => value.includes(query));
 }
 
+// Lower score = better match. BCS GOODS gets a boost so confirmed commodity
+// instruments rise above the MOEX noise (e.g. for "GOLD" or "золото").
 function scoreResult(result: MobileAssetSearchResult, query: string): number {
   const ticker = normalizeText(result.ticker);
   const name = normalizeText(result.name);
   const board = normalizeText(result.board);
-  const bcsBoost = result.sourceProvider === 'bcs' ? -4 : 0;
+  const bcsBoost = result.sourceProvider === 'bcs' ? -10 : 0;
 
-  if (ticker === query) return bcsBoost;
+  if (ticker === query) return 0 + bcsBoost;
   if (ticker.startsWith(query)) return 20 + bcsBoost;
   if (board === query) return 35 + bcsBoost;
+  if (name === query) return 25 + bcsBoost;
   if (name.startsWith(query)) return 40 + bcsBoost;
   if (ticker.includes(query)) return 55 + bcsBoost;
   if (name.includes(query)) return 70 + bcsBoost;
   return 100 + bcsBoost;
 }
 
-function dedupeByTickerPreferBcs(results: MobileAssetSearchResult[]): MobileAssetSearchResult[] {
-  const selected = new Map<string, MobileAssetSearchResult>();
-
-  for (const result of results) {
-    const key = result.ticker.toUpperCase();
-    const existing = selected.get(key);
-    if (!existing) {
-      selected.set(key, result);
-      continue;
-    }
-
-    if (existing.sourceProvider !== 'bcs' && result.sourceProvider === 'bcs') {
-      selected.set(key, result);
-    }
+// Dedupe key includes the source provider, engine, market, and class/board —
+// MOEX GOLD (TQTF ETF) and BCS GOLD (FEG commodity) are different instruments
+// and must NOT collapse into a single row.
+function dedupeKey(r: MobileAssetSearchResult): string {
+  if (r.sourceProvider === 'bcs') {
+    return `bcs:${r.assetGroup ?? 'unknown'}:${r.ticker.toUpperCase()}:${(r.classCode ?? r.board).toUpperCase()}`;
   }
+  return `moex:${r.engine}:${r.market}:${r.board}:${r.ticker.toUpperCase()}`;
+}
 
-  return Array.from(selected.values());
+function dedupe(results: MobileAssetSearchResult[]): MobileAssetSearchResult[] {
+  const seen = new Map<string, MobileAssetSearchResult>();
+  for (const result of results) {
+    const key = dedupeKey(result);
+    if (!seen.has(key)) seen.set(key, result);
+  }
+  return Array.from(seen.values());
+}
+
+function sortByScore(
+  results: MobileAssetSearchResult[],
+  query: string,
+): MobileAssetSearchResult[] {
+  return results.slice().sort((a, b) => {
+    const scoreDelta = scoreResult(a, query) - scoreResult(b, query);
+    if (scoreDelta !== 0) return scoreDelta;
+    return a.ticker.localeCompare(b.ticker);
+  });
 }
 
 export async function searchMobileAssets(query: string): Promise<MobileAssetSearchResponse> {
   const trimmed = query.trim();
   const normalizedQuery = normalizeText(trimmed);
   if (normalizedQuery.length < 2) {
-    return { results: [], bcsTokenRequired: false, bcsUnavailable: false };
+    return {
+      results: [],
+      bcsResults: [],
+      moexResults: [],
+      bcsTokenRequired: false,
+      bcsFallbackUsed: false,
+      bcsLoadStatus: 'fallback',
+    };
   }
 
   const bcsTokenAvailable = hasRefreshToken();
-  let bcsUnavailable = false;
 
   const moexPromise = searchMoex(trimmed)
     .then(results => results.map(toMoexResult))
-    .catch(() => []);
+    .catch(() => [] as MobileAssetSearchResult[]);
 
-  const bcsPromise = bcsTokenAvailable
-    ? loadBcsGoodsInstruments()
-        .then(instruments => instruments
-          .filter(instrument => matchesBcsInstrument(instrument, normalizedQuery))
-          .map(toBcsResult))
-        .catch(() => {
-          bcsUnavailable = true;
-          return [];
-        })
-    : Promise.resolve([]);
+  // BCS GOODS search always runs — loadBcsGoodsInstrumentsWithStatus never throws
+  // and returns the static fallback when the live endpoint is unavailable or no
+  // token is configured. This lets users find GOLD/BRENT/etc. even before they
+  // paste a BCS token; the chart will then prompt for one when opened.
+  const bcsPromise = loadBcsGoodsInstrumentsWithStatus()
+    .then(({ instruments, status }) => ({
+      results: instruments
+        .filter(instrument => matchesBcsInstrument(instrument, normalizedQuery))
+        .map(toBcsResult),
+      status,
+    }))
+    .catch(() => ({ results: [] as MobileAssetSearchResult[], status: 'fallback_error' as const }));
 
-  const [moexResults, bcsResults] = await Promise.all([moexPromise, bcsPromise]);
+  const [moexResults, bcs] = await Promise.all([moexPromise, bcsPromise]);
 
-  const results = dedupeByTickerPreferBcs([...bcsResults, ...moexResults])
-    .sort((a, b) => {
-      const scoreDelta = scoreResult(a, normalizedQuery) - scoreResult(b, normalizedQuery);
-      if (scoreDelta !== 0) return scoreDelta;
-      return a.ticker.localeCompare(b.ticker);
-    });
+  const bcsResults = sortByScore(dedupe(bcs.results), normalizedQuery);
+  const moexResultsSorted = sortByScore(dedupe(moexResults), normalizedQuery);
+
+  // Combined ranking still uses score-based sort so that exact-name BCS matches
+  // (e.g. "GOLD" -> ticker GOLD, "золото" -> displayName "Золото") are ranked
+  // first even when AssetDrawer renders results as a single list.
+  const combined = sortByScore(dedupe([...bcs.results, ...moexResults]), normalizedQuery);
 
   return {
-    results,
-    bcsTokenRequired: !bcsTokenAvailable,
-    bcsUnavailable,
+    results: combined,
+    bcsResults,
+    moexResults: moexResultsSorted,
+    bcsTokenRequired: !bcsTokenAvailable && bcsResults.length > 0,
+    bcsFallbackUsed: bcs.status === 'fallback' || bcs.status === 'fallback_error',
+    bcsLoadStatus: bcs.status,
   };
 }

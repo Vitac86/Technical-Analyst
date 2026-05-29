@@ -73,14 +73,74 @@ function formatAssetMeta(asset: WatchlistAsset): string {
   return asset.board;
 }
 
+type SearchSectionProps = {
+  label: string;
+  sectionClass: 'bcs' | 'moex';
+  results: MobileAssetSearchResult[];
+  watchlist: WatchlistAsset[];
+  addedLabel: string;
+  onPointerDown: (key: string, e: ReactPointerEvent<HTMLLIElement>) => void;
+  onPointerMove: (e: ReactPointerEvent<HTMLLIElement>) => void;
+  onPointerUp: (r: MobileAssetSearchResult, key: string) => void;
+  onPointerCancel: () => void;
+};
+
+function SearchSection({
+  label,
+  sectionClass,
+  results,
+  watchlist,
+  addedLabel,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  onPointerCancel,
+}: SearchSectionProps) {
+  return (
+    <div className={`mc-drawer-search-section mc-drawer-search-section-${sectionClass}`}>
+      <div className="mc-drawer-search-section-label">{label}</div>
+      <ul className="mc-drawer-search-list">
+        {results.map(r => {
+          const resultId = makeAssetId(r.engine, r.market, r.board, r.ticker);
+          const isAdded = watchlist.some(a => a.id === resultId);
+          const key = searchResultKey(r);
+          return (
+            <li
+              key={key}
+              style={isAdded ? { opacity: 0.6 } : undefined}
+              aria-disabled={isAdded}
+              onPointerDown={isAdded ? undefined : e => onPointerDown(key, e)}
+              onPointerMove={isAdded ? undefined : onPointerMove}
+              onPointerUp={isAdded ? undefined : () => onPointerUp(r, key)}
+              onPointerCancel={onPointerCancel}
+            >
+              <span className="mc-dsr-ticker">{r.ticker}</span>
+              <span className="mc-dsr-name">{r.name}</span>
+              <span className="mc-dsr-meta">
+                <span className="mc-result-chip mc-result-chip-board">{r.board}</span>
+                <span className={`mc-result-chip ${r.sourceProvider === 'bcs' ? 'mc-result-chip-bcs' : 'mc-result-chip-moex'}`}>
+                  {resultSourceLabel(r)}
+                </span>
+                {isAdded && <span className="mc-result-chip mc-dsr-added">{addedLabel}</span>}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, onWatchlistChange, onSettingsOpen }: Props) {
   const { t } = useTranslation();
   const [editMode,       setEditMode]       = useState(false);
   const [showSearch,     setShowSearch]     = useState(false);
   const [searchQuery,    setSearchQuery]    = useState('');
-  const [searchResults,  setSearchResults]  = useState<MobileAssetSearchResult[]>([]);
+  const [bcsSection,     setBcsSection]     = useState<MobileAssetSearchResult[]>([]);
+  const [moexSection,    setMoexSection]    = useState<MobileAssetSearchResult[]>([]);
   const [searchLoading,  setSearchLoading]  = useState(false);
   const [bcsTokenHint,   setBcsTokenHint]   = useState(false);
+  const [bcsFallbackHint, setBcsFallbackHint] = useState(false);
   const [dupMsg,         setDupMsg]         = useState(false);
   const [quotes,         setQuotes]         = useState<Record<string, DrawerQuoteState>>({});
 
@@ -101,8 +161,10 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
         setEditMode(false);
         setShowSearch(false);
         setSearchQuery('');
-        setSearchResults([]);
+        setBcsSection([]);
+        setMoexSection([]);
         setBcsTokenHint(false);
+        setBcsFallbackHint(false);
         setDupMsg(false);
         setDragId(null);
         setDragOverId(null);
@@ -115,19 +177,25 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
   const triggerSearch = useCallback((q: string) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     if (q.trim().length < 2) {
-      setSearchResults([]);
+      setBcsSection([]);
+      setMoexSection([]);
       setBcsTokenHint(false);
+      setBcsFallbackHint(false);
       return;
     }
     debounceRef.current = setTimeout(async () => {
       setSearchLoading(true);
       try {
         const response = await searchMobileAssets(q.trim());
-        setSearchResults(response.results);
+        setBcsSection(response.bcsResults);
+        setMoexSection(response.moexResults);
         setBcsTokenHint(response.bcsTokenRequired);
+        setBcsFallbackHint(response.bcsFallbackUsed && response.bcsResults.length > 0);
       } catch {
-        setSearchResults([]);
+        setBcsSection([]);
+        setMoexSection([]);
         setBcsTokenHint(false);
+        setBcsFallbackHint(false);
       } finally {
         setSearchLoading(false);
       }
@@ -393,35 +461,40 @@ export function AssetDrawer({ open, onClose, watchlist, selectedId, onSelect, on
             {bcsTokenHint && (
               <div className="mc-drawer-search-hint">{t('drawer.search.bcsTokenRequired')}</div>
             )}
-            {searchResults.length > 0 && (
-              <ul className="mc-drawer-search-list">
-                {searchResults.map(r => {
-                  const resultId = makeAssetId(r.engine, r.market, r.board, r.ticker);
-                  const isAdded = watchlist.some(a => a.id === resultId);
-                  const key = searchResultKey(r);
-                  return (
-                    <li
-                      key={key}
-                      style={isAdded ? { opacity: 0.6 } : undefined}
-                      aria-disabled={isAdded}
-                      onPointerDown={isAdded ? undefined : e => handleSearchResultPointerDown(key, e)}
-                      onPointerMove={isAdded ? undefined : handleSearchResultPointerMove}
-                      onPointerUp={isAdded ? undefined : () => handleSearchResultPointerUp(r, key)}
-                      onPointerCancel={clearSearchPointer}
-                    >
-                      <span className="mc-dsr-ticker">{r.ticker}</span>
-                      <span className="mc-dsr-name">{r.name}</span>
-                      <span className="mc-dsr-meta">
-                        <span className="mc-result-chip mc-result-chip-board">{r.board}</span>
-                        <span className={`mc-result-chip ${r.sourceProvider === 'bcs' ? 'mc-result-chip-bcs' : 'mc-result-chip-moex'}`}>
-                          {resultSourceLabel(r)}
-                        </span>
-                        {isAdded && <span className="mc-result-chip mc-dsr-added">{t('drawer.added')}</span>}
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
+            {bcsFallbackHint && (
+              <div className="mc-drawer-search-hint mc-drawer-search-hint-info">
+                {t('drawer.search.bcsFallback')}
+              </div>
+            )}
+            {(bcsSection.length > 0 || moexSection.length > 0) && (
+              <div className="mc-drawer-search-sections">
+                {bcsSection.length > 0 && (
+                  <SearchSection
+                    label={t('drawer.search.section.bcsGoods')}
+                    sectionClass="bcs"
+                    results={bcsSection}
+                    watchlist={watchlist}
+                    addedLabel={t('drawer.added')}
+                    onPointerDown={handleSearchResultPointerDown}
+                    onPointerMove={handleSearchResultPointerMove}
+                    onPointerUp={handleSearchResultPointerUp}
+                    onPointerCancel={clearSearchPointer}
+                  />
+                )}
+                {moexSection.length > 0 && (
+                  <SearchSection
+                    label={t('drawer.search.section.moex')}
+                    sectionClass="moex"
+                    results={moexSection}
+                    watchlist={watchlist}
+                    addedLabel={t('drawer.added')}
+                    onPointerDown={handleSearchResultPointerDown}
+                    onPointerMove={handleSearchResultPointerMove}
+                    onPointerUp={handleSearchResultPointerUp}
+                    onPointerCancel={clearSearchPointer}
+                  />
+                )}
+              </div>
             )}
           </div>
         )}
