@@ -24,6 +24,13 @@ Version 1.3 scope (post-processing of the v1.2 outputs; still no ML/UI):
     * leverage comparison proving when PnL actually changes with leverage
     * yearly + fixed-split walk-forward robustness and return-concentration
     * separate candidate rankings (driven by run_robustness_diagnostics)
+
+Version 1.4 scope (deterministic finalist confirmation; still no ML/UI):
+    * exhaustive, non-random re-test of the shortlisted finalists over dense
+      local parameter grids (driven by run_finalist_confirmation)
+    * per-side execution slippage in the risk backtester (worsens both fills)
+    * Base / Conservative / Stress cost scenarios and cost-sensitivity scoring
+    * train / test / walk-forward splits with a research-only confirmation_score
 """
 
 __all__ = [

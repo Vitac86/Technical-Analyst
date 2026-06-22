@@ -69,6 +69,7 @@ RISK_TRADE_COLUMNS: tuple[str, ...] = (
     "gross_pnl",
     "spread_cost",
     "commission",
+    "slippage_cost",
     "swap",
     "net_pnl",
     "balance_after_trade",
@@ -150,6 +151,7 @@ class RiskConfig:
     max_lot: float = 100.0
     point_value: float = 0.01  # price units per "point" (gold: 1 point = 0.01).
     fixed_spread_points: float = 30.0
+    slippage_points: float = 0.0  # per-side execution slippage, in points.
     commission_per_lot_round_turn: float = 0.0
     swap_long_per_lot_per_day: float = 0.0
     swap_short_per_lot_per_day: float = 0.0
@@ -199,6 +201,15 @@ class RiskConfig:
         """Round-turn spread expressed in price units (per ounce)."""
         return self.fixed_spread_points * self.point_value
 
+    @property
+    def slippage_price(self) -> float:
+        """Per-side slippage expressed in price units (per ounce).
+
+        Applied to *both* fills, so a round trip pays it twice (see
+        ``run_risk_backtest``).
+        """
+        return self.slippage_points * self.point_value
+
 
 # ---------------------------------------------------------------------------
 # Position sizing
@@ -244,10 +255,13 @@ def _compute_lots(
     else:  # risk_percent
         risk_amount = (config.risk_percent / 100.0) * equity
         # Approximate per-lot loss if the stop is hit: price distance plus the
-        # round-turn spread and commission that are also realised on exit.
+        # round-turn spread, slippage (both fills) and commission realised on
+        # exit. Including the costs keeps risk-percent sizing honest under the
+        # conservative/stress cost scenarios.
         risk_per_lot = (
             stop_distance_price * cs
             + config.spread_price * cs
+            + 2.0 * config.slippage_price * cs
             + config.commission_per_lot_round_turn
         )
         raw = risk_amount / risk_per_lot if risk_per_lot > 0 else 0.0
@@ -531,6 +545,12 @@ def run_risk_backtest(
     n = len(df)
     cs = config.contract_size
     spread_cost_per_lot = config.spread_price * cs  # round-turn, account currency
+    # Slippage worsens BOTH the entry and the exit fill by ``slippage_points``
+    # each (a long buys higher and sells lower; a short sells lower and buys
+    # higher), so the round-turn drag is twice the per-side slippage. Modelling
+    # it as an account-currency cost is exactly equivalent to shifting both fill
+    # prices for PnL purposes and keeps it consistent with the spread model.
+    slippage_cost_per_lot = 2.0 * config.slippage_price * cs  # round-turn
     direction_label = {1: "long", -1: "short"}
 
     balance = config.initial_equity
@@ -606,6 +626,7 @@ def run_risk_backtest(
 
         round_turn_cost = (
             spread_cost_per_lot * lots
+            + slippage_cost_per_lot * lots
             + config.commission_per_lot_round_turn * lots
         )
         swap_rate = (
@@ -642,8 +663,9 @@ def run_risk_backtest(
         gross_pnl = (result.exit_price - entry_price) * cs * lots * direction
         spread_cost = spread_cost_per_lot * lots
         commission = config.commission_per_lot_round_turn * lots
+        slippage_cost = slippage_cost_per_lot * lots
         swap = swap_rate * lots * days_held
-        net_pnl = gross_pnl - spread_cost - commission + swap
+        net_pnl = gross_pnl - spread_cost - commission - slippage_cost + swap
 
         balance_before = balance
         balance += net_pnl
@@ -675,6 +697,7 @@ def run_risk_backtest(
                 "gross_pnl": gross_pnl,
                 "spread_cost": spread_cost,
                 "commission": commission,
+                "slippage_cost": slippage_cost,
                 "swap": swap,
                 "net_pnl": net_pnl,
                 "balance_after_trade": balance,
