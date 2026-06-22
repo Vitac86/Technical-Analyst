@@ -21,4 +21,5 @@ __all__ = [
     "strategies",
     "backtester",
     "metrics",
+    "exit_research",
 ]
