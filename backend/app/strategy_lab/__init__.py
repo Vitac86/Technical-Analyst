@@ -13,6 +13,17 @@ Version 1 scope:
     * ATR-based stop-loss / take-profit exits
     * single position at a time, long and short
     * no machine learning, no UI
+
+Version 1.2 scope (research only, still pandas/numpy and no ML/UI):
+    * account-based backtester with equity, position sizing and lots
+    * leverage / margin model with stop-out (forced liquidation)
+    * wide SL/TP, ATR trailing, time and opposite-signal exits
+
+Version 1.3 scope (post-processing of the v1.2 outputs; still no ML/UI):
+    * effective leverage (real exposure vs. equity) vs. nominal broker leverage
+    * leverage comparison proving when PnL actually changes with leverage
+    * yearly + fixed-split walk-forward robustness and return-concentration
+    * separate candidate rankings (driven by run_robustness_diagnostics)
 """
 
 __all__ = [
@@ -22,4 +33,5 @@ __all__ = [
     "backtester",
     "metrics",
     "exit_research",
+    "risk_backtester",
 ]

@@ -44,3 +44,7 @@ ml/data/
 ml/models/*.cbm
 ml/models/*.bin
 ml/reports/
+
+# MetaTrader local exports and generated research reports
+MetaTrader_Data/mt5_exports/
+MetaTrader_Data/reports/
