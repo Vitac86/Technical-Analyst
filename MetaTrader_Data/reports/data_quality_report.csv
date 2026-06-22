@@ -1,0 +1,6 @@
+file_name,symbol,timeframe,status,error,row_count,first_datetime,last_datetime,duplicate_datetime_count,missing_value_count,invalid_ohlc_row_count,average_spread,median_spread,min_spread,max_spread,expected_interval,unusually_large_gap_count,maximum_observed_gap
+XAUUSDrfd_D1.csv,XAUUSDrfd,D1,success,,2975,2015-01-02T00:00:00+00:00,2026-06-22T00:00:00+00:00,0,0,0,30.903865546218487,30.0,0.0,3807.0,1 days 00:00:00,604,8 days 00:00:00
+XAUUSDrfd_H1.csv,XAUUSDrfd,H1,success,,67434,2015-01-02T09:00:00+00:00,2026-06-22T12:00:00+00:00,0,0,0,35.61273244950618,30.0,0.0,13296.0,0 days 01:00:00,2733,7 days 08:00:00
+XAUUSDrfd_H4.csv,XAUUSDrfd,H4,success,,17695,2015-01-02T08:00:00+00:00,2026-06-22T12:00:00+00:00,0,0,0,34.05255721955355,30.0,0.0,13296.0,0 days 04:00:00,620,7 days 08:00:00
+XAUUSDrfd_M15.csv,XAUUSDrfd,M15,success,,100062,2022-03-08T22:45:00+00:00,2026-06-22T12:00:00+00:00,0,0,0,24.05497591493274,18.0,0.0,2507.0,0 days 00:15:00,1276,3 days 09:15:00
+XAUUSDrfd_M5.csv,XAUUSDrfd,M5,success,,100160,2025-01-13T13:40:00+00:00,2026-06-22T12:05:00+00:00,0,0,0,48.27090654952077,45.0,45.0,300.0,0 days 00:05:00,487,3 days 06:30:00
