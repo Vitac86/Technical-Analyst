@@ -31,6 +31,15 @@ Version 1.4 scope (deterministic finalist confirmation; still no ML/UI):
     * per-side execution slippage in the risk backtester (worsens both fills)
     * Base / Conservative / Stress cost scenarios and cost-sensitivity scoring
     * train / test / walk-forward splits with a research-only confirmation_score
+
+Version 1.5 scope (ML signal *filter* only -- never predicts price or generates
+trades; driven by run_ml_signal_filter):
+    * a leakage-safe dataset of executed rule-based trade candidates, with
+      features taken at the signal candle and realised outcomes as targets
+      (ml_features, ml_signal_filter)
+    * a CatBoost classifier that only filters existing rule-based long signals,
+      with the probability threshold chosen on validation data only and the
+      held-out test period used purely for the filtered-vs-unfiltered comparison
 """
 
 __all__ = [
@@ -41,4 +50,6 @@ __all__ = [
     "metrics",
     "exit_research",
     "risk_backtester",
+    "ml_features",
+    "ml_signal_filter",
 ]
