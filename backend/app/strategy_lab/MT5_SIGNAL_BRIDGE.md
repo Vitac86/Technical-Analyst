@@ -1,9 +1,14 @@
-# Strategy Lab v1.7 — MT5 Signal-Only Bridge
+# Strategy Lab v1.7 / v1.7.1 — MT5 Signal-Only Bridge
 
-> **v1.7 is signal-only. Execution is intentionally disabled.**
+> **Signal-only. Execution is intentionally disabled.**
 > The bridge **never** opens, closes or modifies orders/positions, never logs in
 > to the broker, never stores credentials, and never enables live trading.
 > `execution_enabled` is always `false`.
+
+**v1.7.1** adds a UI control panel (and the backend API behind it) so you can
+drive the *same* signal-only bridge from the Strategy Lab page instead of typing
+long CLI commands — save a config, check MT5 readiness, run one check, and
+start/stop polling, all from the browser. The CLI remains as a fallback.
 
 The bridge connects to a **locally running** MetaTrader 5 terminal, reads a
 Strategy Lab v1.6 exported strategy config, pulls recent candles, computes the
@@ -22,7 +27,77 @@ breakout) is also supported.
 | [mt5_signal_bridge.py](mt5_signal_bridge.py) | Core: config validation, MT5 connection, rates→DataFrame, closed-candle rule, signal generation, safety locks. |
 | [run_mt5_signal_bridge.py](run_mt5_signal_bridge.py) | CLI runner (`--once` / polling). |
 | [signal_store.py](signal_store.py) | Local state + signal log + latest signal (JSON/CSV). |
-| [../api/v1/endpoints/strategy_lab_signals.py](../api/v1/endpoints/strategy_lab_signals.py) | Read-only `GET /api/strategy-lab/signals/latest` and `/history`. |
+| [mt5_bridge_manager.py](mt5_bridge_manager.py) | v1.7.1 control layer: save/list configs, MT5 readiness, run-once, start/stop polling subprocess, tail logs. Reuses the bridge core — no duplicated logic. |
+| [../api/v1/endpoints/strategy_lab_signals.py](../api/v1/endpoints/strategy_lab_signals.py) | Read-only `/latest` + `/history` **and** the v1.7.1 control endpoints. |
+
+## Using the bridge from the UI (v1.7.1)
+
+Open **Strategy Lab** in the web app and scroll to the **MT5 Signal Bridge**
+panel below the backtest. The flow is top-to-bottom:
+
+1. **Config** — pick/adjust a preset (default **D**) as usual, then click
+   **Save current config for bridge**. This exports the current config and saves
+   it server-side under `MetaTrader_Data/configs/`. The saved file appears in the
+   **Saved configs** dropdown; use **Refresh configs** to reload the list.
+   *Until a config is saved, **Check once** and **Start polling** are disabled and
+   the panel shows “Save current config for bridge first.”*
+2. **MT5 readiness** — click **Check MT5 connection**. A badge shows
+   **Ready / Warning / Error** plus terminal/account/symbol/timeframe, whether
+   rates are available, and the latest closed-candle time. If MT5 is missing it
+   tells you to *install MetaTrader5 in the backend venv and open / log in to MT5*.
+3. **Signal actions** — **Check once** runs a single check now; **Start polling**
+   launches a background poller every *poll seconds* (default 60); **Stop polling**
+   stops it. While polling is running, **Start** is disabled and **Stop** is
+   enabled (and vice-versa).
+4. **Latest signal** / **Signal history** — show the most recent alert and the
+   full log. A prominent **“Signal-only mode. Execution disabled.”** badge is
+   always visible, and `execution_enabled` is shown as `false` on every row.
+5. **Logs** — collapsed by default; **Refresh logs** shows the poller’s
+   stdout/stderr tail.
+
+### Control API (all under `/api/strategy-lab/signals`, no execution)
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET  /latest` | Most recent emitted signal. |
+| `GET  /history?limit=50` | Recent signals, newest first. |
+| `POST /configs/save` | Validate + save a config JSON (body: `{config, name?}`). |
+| `GET  /configs` | List saved configs with a summary. |
+| `POST /mt5-check` | MT5 readiness for `{config_path \| config, bars}` — no signal, no trade. |
+| `POST /check-once` | Run one signal-only check; writes via the store. |
+| `POST /start` | Start polling subprocess (`{config_path, poll_seconds, bars}`). |
+| `POST /stop` | Stop the managed polling subprocess. |
+| `GET  /status` | Running flag, pid, started_at, config, poll_seconds, latest signal, log excerpts. |
+| `GET  /logs?lines=100` | stdout/stderr tail. |
+
+There are **no** order-execution endpoints. Every response includes
+`execution_enabled: false`.
+
+### How start/stop works (process management)
+
+`POST /start` launches the **existing CLI runner** as a subprocess using the
+backend’s own interpreter:
+
+```text
+<sys.executable> run_mt5_signal_bridge.py --config <saved.json> \
+    --poll-seconds <n> --bars <n> --output-dir <reports/mt5_signal_bridge>
+```
+
+stdout/stderr are redirected to `bridge_stdout.log` / `bridge_stderr.log`, and
+the pid + metadata are written to `bridge_process.json`. A second `start` while a
+recorded pid is still alive is refused (no duplicate poller). `POST /stop`
+terminates that pid gracefully (`taskkill /T` on Windows, `SIGTERM` on POSIX) and
+force-kills only if it does not exit; liveness is checked via the Win32 API on
+Windows (never via `os.kill`, which would terminate the process). Because state
+lives in `bridge_process.json` + the log files, `GET /status` is correct even
+after a backend restart.
+
+### Manual CLI fallback
+
+The UI is just a convenience wrapper. You can still run the bridge by hand
+(useful for debugging or headless boxes) — see sections 3–4 below. The UI-saved
+configs live in `MetaTrader_Data/configs/`, so you can point `--config` straight
+at one of them.
 
 ## 1. Export a config from the UI
 
@@ -102,6 +177,14 @@ which is **git-ignored** — generated logs are never committed):
   strategy/symbol/timeframe (deduplication).
 - `signals.csv` — append-only log, one row per processed closed candle.
 - `latest_signal.json` — the most recent signal record.
+- `bridge_process.json` — managed-poller state (pid, started_at, config_path,
+  poll_seconds, bars, status). *(v1.7.1)*
+- `bridge_stdout.log` / `bridge_stderr.log` — the polling subprocess output.
+  *(v1.7.1)*
+
+UI-saved configs are written to `MetaTrader_Data/configs/` (also **git-ignored** —
+generated configs are never committed). All of `mt5_exports/`, `reports/` and
+`configs/` under `MetaTrader_Data/` are ignored by git.
 
 Each signal record contains: `signal_id`, `generated_at`, `symbol`, `timeframe`,
 `strategy_id`, `signal_time`, `signal_type` (`BUY`/`NONE`), `reason`,
@@ -147,5 +230,45 @@ Run the tests (no MT5 terminal required — MT5 is mocked):
 
 ```bash
 cd backend
-.venv/Scripts/python.exe -m pytest app/tests/test_mt5_signal_bridge.py -q
+.venv/Scripts/python.exe -m pytest app/tests/test_mt5_signal_bridge.py \
+    app/tests/test_mt5_bridge_manager.py -q
+```
+
+`test_mt5_bridge_manager.py` additionally asserts none of the order/trade tokens
+appear in the new manager **or** the control endpoints, and that the start
+endpoint never launches a duplicate poller.
+
+## 8. Troubleshooting
+
+| Symptom | Cause / fix |
+| --- | --- |
+| **MT5 readiness: “Install MetaTrader5…”** | The `MetaTrader5` package is not in the backend venv. `pip install MetaTrader5` (Windows only) and restart the backend. |
+| **`mt5.initialize() failed`** | The terminal is not running / not logged in. Open MetaTrader 5 and log in to your broker account, then re-check. The bridge attaches to the running terminal and never handles credentials. |
+| **`Symbol 'XAUUSD' not found`** | Your broker uses a different name. The bridge auto-tries the `…rfd` variant; otherwise re-export/save the config with the broker’s exact symbol (e.g. `XAUUSDrfd`). |
+| **`copy_rates_from_pos returned no data`** | The symbol is not in Market Watch or the history is empty. Add the symbol in MT5 (right-click → Show) and let it download history. |
+| **Readiness shows “Warning: only N closed bars”** | Not enough history yet for the indicators. Let MT5 download more bars, or lower expectations — a check can still run, but verify the signal carefully. |
+| **Check once / Start polling disabled** | No config saved. Click **Save current config for bridge** first. |
+| **Status shows stopped right after Start** | The poller exited — open **Logs** (or `bridge_stderr.log`) for the reason (usually MT5 not running or symbol/rates issues). |
+
+## 9. Quick commands
+
+```bash
+# 1. Install the MT5 package (Windows; the terminal must be installed + logged in)
+pip install MetaTrader5
+
+# 2. Start the backend
+cd backend
+.venv/Scripts/python.exe -m uvicorn app.main:app --reload
+
+# 3. Start the frontend (separate shell) and open Strategy Lab
+cd frontend
+npm run dev          # then browse to the app and open "Strategy Lab"
+
+# 4. In the UI: Save current config for bridge → Check MT5 connection →
+#    Check once → Start/Stop polling. Latest signal + history update live.
+
+# 5. CLI fallback (uses a UI-saved config or any exported config JSON)
+python backend/app/strategy_lab/run_mt5_signal_bridge.py \
+    --config MetaTrader_Data/configs/D_supertrend_h4_trailing_risk_XAUUSD_H4.json \
+    --poll-seconds 60
 ```

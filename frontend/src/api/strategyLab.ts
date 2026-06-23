@@ -1,7 +1,16 @@
 import type {
   BacktestRequest,
   BacktestResponse,
+  BridgeProcessStatus,
+  CheckOnceResponse,
+  LatestSignalResponse,
+  Mt5Readiness,
   PresetsResponse,
+  SaveSignalConfigResponse,
+  SignalConfigsResponse,
+  SignalHistoryResponse,
+  SignalLogsResponse,
+  StrategyConfig,
 } from "../types/strategyLab";
 
 // Strategy Lab lives under its own namespace (not the /api/v1 client base).
@@ -73,4 +82,98 @@ export async function exportConfig(body: BacktestRequest): Promise<void> {
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
+}
+
+/** Fetch the portable strategy config object (same as exportConfig, no download). */
+export function fetchExportedConfig(
+  body: BacktestRequest,
+): Promise<StrategyConfig> {
+  return request<StrategyConfig>("/export-config", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// v1.7.1 MT5 signal-only bridge control (no execution / no order endpoints).
+// These live under /api/strategy-lab/signals (relative to BASE_URL).
+// ---------------------------------------------------------------------------
+
+/** Save the current strategy config for the signal-only bridge. */
+export function saveSignalConfig(
+  config: StrategyConfig,
+  name?: string,
+): Promise<SaveSignalConfigResponse> {
+  return request<SaveSignalConfigResponse>("/signals/configs/save", {
+    method: "POST",
+    body: JSON.stringify({ config, name: name ?? null }),
+  });
+}
+
+/** List the server-side saved configs available to the bridge. */
+export function listSignalConfigs(): Promise<SignalConfigsResponse> {
+  return request<SignalConfigsResponse>("/signals/configs");
+}
+
+/** Check MT5 readiness (package/terminal/symbol/rates) — never trades. */
+export function checkMt5Readiness(
+  configPath: string,
+  bars = 500,
+): Promise<Mt5Readiness> {
+  return request<Mt5Readiness>("/signals/mt5-check", {
+    method: "POST",
+    body: JSON.stringify({ config_path: configPath, bars }),
+  });
+}
+
+/** Run a single signal-only check for a saved config. */
+export function checkSignalOnce(
+  configPath: string,
+  bars = 500,
+): Promise<CheckOnceResponse> {
+  return request<CheckOnceResponse>("/signals/check-once", {
+    method: "POST",
+    body: JSON.stringify({ config_path: configPath, bars }),
+  });
+}
+
+/** Start the signal-only polling bridge as a managed subprocess. */
+export function startSignalBridge(
+  configPath: string,
+  pollSeconds = 60,
+  bars = 500,
+): Promise<BridgeProcessStatus> {
+  return request<BridgeProcessStatus>("/signals/start", {
+    method: "POST",
+    body: JSON.stringify({
+      config_path: configPath,
+      poll_seconds: pollSeconds,
+      bars,
+    }),
+  });
+}
+
+/** Stop the managed polling bridge process. */
+export function stopSignalBridge(): Promise<BridgeProcessStatus> {
+  return request<BridgeProcessStatus>("/signals/stop", { method: "POST" });
+}
+
+/** Bridge status: process state + latest signal + log excerpts. */
+export function getSignalBridgeStatus(): Promise<BridgeProcessStatus> {
+  return request<BridgeProcessStatus>("/signals/status");
+}
+
+/** The most recently emitted signal (or null). */
+export function getLatestSignal(): Promise<LatestSignalResponse> {
+  return request<LatestSignalResponse>("/signals/latest");
+}
+
+/** Up to `limit` most-recent signals (newest first). */
+export function getSignalHistory(limit = 50): Promise<SignalHistoryResponse> {
+  return request<SignalHistoryResponse>(`/signals/history?limit=${limit}`);
+}
+
+/** The last `lines` of the bridge stdout/stderr logs. */
+export function getSignalLogs(lines = 100): Promise<SignalLogsResponse> {
+  return request<SignalLogsResponse>(`/signals/logs?lines=${lines}`);
 }

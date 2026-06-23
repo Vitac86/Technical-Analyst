@@ -152,3 +152,122 @@ export interface BacktestRequest {
 }
 
 export type ParamValues = Record<string, number | null>;
+
+// ---------------------------------------------------------------------------
+// v1.7.1 MT5 signal-only bridge (no execution; see strategy_lab_signals API)
+// ---------------------------------------------------------------------------
+
+/** The portable strategy config object produced by /export-config. */
+export type StrategyConfig = Record<string, unknown>;
+
+export interface SignalConfigSummary {
+  strategy_id: string | null;
+  symbol: string | null;
+  timeframe: string | null;
+  direction_mode: string | null;
+  ml_filter_enabled: boolean;
+}
+
+export interface SaveSignalConfigResponse {
+  file_name: string;
+  path: string;
+  config_summary: SignalConfigSummary;
+  execution_enabled: boolean;
+}
+
+export interface SavedSignalConfig {
+  file_name: string;
+  path: string;
+  strategy_id: string | null;
+  symbol: string | null;
+  timeframe: string | null;
+  created_at: string | null;
+  modified_at: string | null;
+  ml_filter_enabled: boolean;
+}
+
+export interface SignalConfigsResponse {
+  configs: SavedSignalConfig[];
+  execution_enabled: boolean;
+}
+
+export type Mt5ReadinessStatus = "ok" | "warning" | "error";
+
+export interface Mt5Readiness {
+  status: Mt5ReadinessStatus;
+  mt5_package_available: boolean;
+  terminal_connected: boolean;
+  account_connected: boolean;
+  symbol: string | null;
+  timeframe: string | null;
+  rates_available: boolean;
+  bars_fetched: number;
+  latest_closed_candle_time: string | null;
+  message: string;
+  execution_enabled: boolean;
+}
+
+export interface SignalRecord {
+  signal_id: string;
+  generated_at: string;
+  symbol: string;
+  timeframe: string;
+  strategy_id: string;
+  signal_time: string;
+  signal_type: string; // "BUY" | "NONE"
+  reason: string;
+  close_price: number | string | null;
+  atr_value: number | string | null;
+  suggested_entry_reference: string;
+  risk_percent: number | string | null;
+  initial_stop_loss_atr: number | string | null;
+  trailing_stop_atr: number | string | null;
+  take_profit_atr: number | string | null;
+  status: string;
+  execution_enabled: boolean | string;
+}
+
+export interface LatestSignalResponse {
+  signal: SignalRecord | null;
+  execution_enabled: boolean;
+}
+
+export interface SignalHistoryResponse {
+  signals: SignalRecord[];
+  count: number;
+  execution_enabled: boolean;
+}
+
+export interface CheckOnceResponse {
+  ok: boolean;
+  emitted: boolean;
+  signal: SignalRecord | null;
+  stdout: string;
+  stderr: string;
+  execution_enabled: boolean;
+}
+
+export interface BridgeProcessStatus {
+  running: boolean;
+  pid: number | null;
+  started_at: string | null;
+  config_path: string | null;
+  poll_seconds: number | null;
+  bars: number | null;
+  status: string;
+  started?: boolean;
+  stopped?: boolean;
+  message?: string;
+  execution_enabled: boolean;
+  // present on GET /status
+  latest_signal?: SignalRecord | null;
+  latest_signal_time?: string | null;
+  latest_log_excerpt?: string;
+  error_excerpt?: string | null;
+}
+
+export interface SignalLogsResponse {
+  stdout_tail: string;
+  stderr_tail: string;
+  execution_enabled: boolean;
+}

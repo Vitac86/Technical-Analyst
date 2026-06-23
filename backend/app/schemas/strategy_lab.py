@@ -235,3 +235,37 @@ class CompareResponse(BaseModel):
 # ---------------------------------------------------------------------------
 class ExportConfigRequest(StrategyConfigBody):
     pass
+
+
+# ---------------------------------------------------------------------------
+# v1.7.1 MT5 signal-only bridge control (no execution, no order endpoints)
+# ---------------------------------------------------------------------------
+class SaveSignalConfigRequest(BaseModel):
+    """Save a Strategy Lab config JSON for the signal-only bridge.
+
+    ``config`` is the full exported strategy config object (the same shape the
+    ``/export-config`` endpoint returns); ``name`` is an optional file name.
+    """
+
+    config: dict[str, Any]
+    name: Optional[str] = None
+
+
+class Mt5CheckRequest(BaseModel):
+    """Check MT5 readiness for a saved-config path or an inline config object."""
+
+    config_path: Optional[str] = None
+    config: Optional[dict[str, Any]] = None
+    bars: int = Field(default=500, ge=2, le=5000)
+
+
+class CheckOnceRequest(Mt5CheckRequest):
+    """Run a single signal-only check (same input shape as the readiness check)."""
+
+
+class StartBridgeRequest(BaseModel):
+    """Start the signal-only polling bridge for a previously saved config."""
+
+    config_path: str
+    poll_seconds: int = Field(default=60, ge=5, le=86400)
+    bars: int = Field(default=500, ge=2, le=5000)

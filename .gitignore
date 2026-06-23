@@ -48,3 +48,5 @@ ml/reports/
 # MetaTrader local exports and generated research reports
 MetaTrader_Data/mt5_exports/
 MetaTrader_Data/reports/
+# Signal-bridge saved configs (generated from the UI; never commit)
+MetaTrader_Data/configs/
