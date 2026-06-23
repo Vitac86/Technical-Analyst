@@ -6,6 +6,7 @@ import type {
   LatestSignalResponse,
   Mt5Readiness,
   PresetsResponse,
+  RecentChecksResponse,
   SaveSignalConfigResponse,
   SignalConfigsResponse,
   SignalHistoryResponse,
@@ -130,10 +131,15 @@ export function checkMt5Readiness(
 export function checkSignalOnce(
   configPath: string,
   bars = 500,
+  recentLimit = 20,
 ): Promise<CheckOnceResponse> {
   return request<CheckOnceResponse>("/signals/check-once", {
     method: "POST",
-    body: JSON.stringify({ config_path: configPath, bars }),
+    body: JSON.stringify({
+      config_path: configPath,
+      bars,
+      recent_limit: recentLimit,
+    }),
   });
 }
 
@@ -171,6 +177,11 @@ export function getLatestSignal(): Promise<LatestSignalResponse> {
 /** Up to `limit` most-recent signals (newest first). */
 export function getSignalHistory(limit = 50): Promise<SignalHistoryResponse> {
   return request<SignalHistoryResponse>(`/signals/history?limit=${limit}`);
+}
+
+/** Per-candle diagnostics over the latest closed candles (newest first). */
+export function getRecentChecks(limit = 20): Promise<RecentChecksResponse> {
+  return request<RecentChecksResponse>(`/signals/recent-checks?limit=${limit}`);
 }
 
 /** The last `lines` of the bridge stdout/stderr logs. */

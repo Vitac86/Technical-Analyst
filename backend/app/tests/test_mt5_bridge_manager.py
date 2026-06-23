@@ -321,6 +321,76 @@ def test_check_once_endpoint_surfaces_mt5_error(
 
 
 # ---------------------------------------------------------------------------
+# D2. Enriched output: recent checks + trading plan (signal-only)
+# ---------------------------------------------------------------------------
+def test_check_once_endpoint_returns_recent_checks_and_plan(
+    client: TestClient,
+    bridge_env: SimpleNamespace,
+    d_config: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(manager, "_load_mt5", _buy_fake)
+    resp = client.post(
+        "/api/strategy-lab/signals/check-once",
+        json={"config": d_config, "recent_limit": 5},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["execution_enabled"] is False
+
+    # Enriched signal carries a reference trading plan, execution still disabled.
+    signal = body["signal"]
+    assert signal["execution_enabled"] is False
+    assert signal["trading_plan"]["reference_entry_price"] is not None
+    assert signal["trading_plan"]["suggested_lot"] is not None
+
+    # Recent checks: multiple rows, none of which enable execution.
+    checks = body["recent_checks"]
+    assert isinstance(checks, list) and len(checks) >= 1
+    assert all(row["execution_enabled"] is False for row in checks)
+
+
+def test_recent_checks_endpoint(
+    client: TestClient,
+    bridge_env: SimpleNamespace,
+    d_config: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Empty before any check has run.
+    empty = client.get("/api/strategy-lab/signals/recent-checks").json()
+    assert empty["recent_checks"] == []
+    assert empty["count"] == 0
+    assert empty["execution_enabled"] is False
+
+    # Populated after one check (no duplicate official signal is created).
+    monkeypatch.setattr(manager, "_load_mt5", _buy_fake)
+    manager.run_check_once(d_config, bars=500, recent_limit=10)
+    populated = client.get(
+        "/api/strategy-lab/signals/recent-checks?limit=5"
+    ).json()
+    assert len(populated["recent_checks"]) >= 1
+    assert populated["count"] == len(populated["recent_checks"])
+    assert populated["strategy_id"] == D_PRESET
+    assert populated["execution_enabled"] is False
+
+
+def test_status_endpoint_includes_recent_checks(
+    client: TestClient,
+    bridge_env: SimpleNamespace,
+    d_config: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(manager, "_load_mt5", _buy_fake)
+    manager.run_check_once(d_config, recent_limit=10)
+    body = client.get("/api/strategy-lab/signals/status").json()
+    assert "recent_checks" in body
+    assert isinstance(body["recent_checks"], list)
+    assert body["latest_signal"]["execution_enabled"] is False
+    assert body["execution_enabled"] is False
+
+
+# ---------------------------------------------------------------------------
 # E/F/G. Process management: duplicate prevention, stop, status
 # ---------------------------------------------------------------------------
 def test_start_does_not_start_duplicate(
@@ -421,14 +491,10 @@ def test_no_execution_tokens_in_new_code() -> None:
         "trade_request",
     )
     manager_path = Path(manager.__file__).resolve()
-    endpoint_path = (
-        manager_path.parents[1]
-        / "api"
-        / "v1"
-        / "endpoints"
-        / "strategy_lab_signals.py"
-    )
-    for path in (manager_path, endpoint_path):
+    app_root = manager_path.parents[1]
+    endpoint_path = app_root / "api" / "v1" / "endpoints" / "strategy_lab_signals.py"
+    schema_path = app_root / "schemas" / "strategy_lab.py"
+    for path in (manager_path, endpoint_path, schema_path):
         text = path.read_text(encoding="utf-8")
         for token in forbidden:
             assert token not in text, f"{token} must not appear in {path.name}"

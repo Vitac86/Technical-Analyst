@@ -4,6 +4,7 @@ import {
   checkMt5Readiness,
   checkSignalOnce,
   fetchExportedConfig,
+  getRecentChecks,
   getSignalBridgeStatus,
   getSignalHistory,
   getSignalLogs,
@@ -16,6 +17,7 @@ import type {
   BacktestRequest,
   BridgeProcessStatus,
   Mt5Readiness,
+  RecentCheck,
   SavedSignalConfig,
   SignalLogsResponse,
   SignalRecord,
@@ -38,6 +40,43 @@ function fmtCell(value: number | string | null | undefined): string {
   if (Number.isFinite(num)) return num.toFixed(num >= 1000 ? 1 : 3);
   return String(value);
 }
+
+/** Suggested lot is a reference, never an order: show "not available" when null. */
+function fmtLot(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "not available";
+  const num = typeof value === "string" ? Number(value) : value;
+  if (!Number.isFinite(num)) return "not available";
+  return num.toFixed(2);
+}
+
+/** NONE is shown as "NO ENTRY" everywhere in the UI. */
+function signalLabel(signalType: string | null | undefined): string {
+  return signalType === "BUY" ? "BUY" : "NO ENTRY";
+}
+
+function signalClass(signalType: string | null | undefined): string {
+  return signalType === "BUY"
+    ? "slb-signal slb-signal-buy"
+    : "slb-signal slb-signal-none";
+}
+
+function regimeLabel(regime: string | null | undefined): string {
+  if (!regime) return "—";
+  return regime.charAt(0).toUpperCase() + regime.slice(1);
+}
+
+function regimeClass(regime: string | null | undefined): string {
+  if (regime === "bullish") return "slb-badge slb-badge-ok";
+  if (regime === "bearish") return "slb-badge slb-badge-err";
+  if (regime === "neutral") return "slb-badge slb-badge-warn";
+  return "slb-badge slb-badge-idle";
+}
+
+const EQUITY_SOURCE_LABEL: Record<string, string> = {
+  mt5_account_equity: "MT5 account equity",
+  config_initial_equity: "config initial_equity (MT5 equity unavailable)",
+  unavailable: "not available",
+};
 
 function readinessClass(status: Mt5Readiness["status"]): string {
   if (status === "ok") return "slb-badge slb-badge-ok";
@@ -65,6 +104,7 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
   const [status, setStatus] = useState<BridgeProcessStatus | null>(null);
   const [latest, setLatest] = useState<SignalRecord | null>(null);
   const [history, setHistory] = useState<SignalRecord[]>([]);
+  const [recentChecks, setRecentChecks] = useState<RecentCheck[]>([]);
 
   const [logs, setLogs] = useState<SignalLogsResponse | null>(null);
   const [logsOpen, setLogsOpen] = useState(false);
@@ -88,13 +128,20 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
   const refreshStatus = useCallback(async () => {
     const data = await getSignalBridgeStatus();
     setStatus(data);
+    // The status carries the full *enriched* latest_signal.json record; prefer it
+    // for the cards (CSV history rows are flat and lack the nested objects).
     if (data.latest_signal !== undefined) setLatest(data.latest_signal ?? null);
+    if (data.recent_checks) setRecentChecks(data.recent_checks);
   }, []);
 
   const refreshHistory = useCallback(async () => {
     const data = await getSignalHistory(50);
     setHistory(data.signals);
-    if (data.signals[0]) setLatest(data.signals[0]);
+  }, []);
+
+  const refreshRecentChecks = useCallback(async () => {
+    const data = await getRecentChecks(20);
+    setRecentChecks(data.recent_checks);
   }, []);
 
   // Initial load.
@@ -102,7 +149,8 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
     void refreshConfigs().catch(() => undefined);
     void refreshStatus().catch(() => undefined);
     void refreshHistory().catch(() => undefined);
-  }, [refreshConfigs, refreshStatus, refreshHistory]);
+    void refreshRecentChecks().catch(() => undefined);
+  }, [refreshConfigs, refreshStatus, refreshHistory, refreshRecentChecks]);
 
   // Poll status while the bridge is running so the UI stays current.
   const runningRef = useRef(running);
@@ -163,6 +211,7 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
       const result = await checkSignalOnce(selectedPath);
       if (!result.ok && result.stderr) setError(result.stderr);
       if (result.signal) setLatest(result.signal);
+      if (result.recent_checks) setRecentChecks(result.recent_checks);
       await refreshHistory();
       await refreshStatus();
     });
@@ -191,6 +240,16 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
     readiness && readiness.status === "error"
       ? "Install MetaTrader5 in the backend venv and open / log in to the MT5 terminal."
       : null;
+
+  // Derived views of the latest enriched signal for the cards below.
+  const snapshot = latest?.market_snapshot;
+  const state = latest?.strategy_state;
+  const plan = latest?.trading_plan;
+  const isBuy = latest?.signal_type === "BUY";
+  const isDonchian = (latest?.strategy_id ?? "").includes("donchian");
+  const equitySourceLabel = plan?.account_equity_source
+    ? (EQUITY_SOURCE_LABEL[plan.account_equity_source] ?? plan.account_equity_source)
+    : null;
 
   return (
     <section className="panel slb-panel">
@@ -383,11 +442,11 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
         </div>
       </div>
 
-      {/* D. Latest signal */}
+      {/* D. Latest signal: status + market snapshot + trading plan cards */}
       <div className="slb-section">
         <h3 className="slb-section-title">Latest signal</h3>
         <div className="slb-safety-badge slb-safety-inline">
-          Signal-only mode. Execution disabled.
+          Signal-only mode. Execution disabled. No order is ever sent.
         </div>
         {latest ? (
           <>
@@ -396,71 +455,270 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
                 This signal may be stale (generated {fmtDateTime(latest.generated_at)}).
               </div>
             ) : null}
-            <dl className="slb-kv slb-kv-wide">
-              <div>
-                <dt>Signal</dt>
-                <dd>
+
+            <div className="slb-cards">
+              {/* A. Signal status card */}
+              <div className="slb-card">
+                <div className="slb-card-head">
+                  <span className="slb-card-title">Signal status</span>
                   <span
                     className={
-                      latest.signal_type === "BUY"
-                        ? "slb-signal slb-signal-buy"
-                        : "slb-signal slb-signal-none"
+                      isBuy
+                        ? "slb-bigbadge slb-bigbadge-buy"
+                        : "slb-bigbadge slb-bigbadge-none"
                     }
                   >
-                    {latest.signal_type}
+                    {signalLabel(latest.signal_type)}
                   </span>
-                </dd>
+                </div>
+                <p className="slb-card-reason">
+                  {latest.reason_human ?? latest.reason}
+                </p>
+                <dl className="slb-kv slb-kv-wide">
+                  <div>
+                    <dt>Strategy regime</dt>
+                    <dd>
+                      <span className={regimeClass(state?.strategy_regime)}>
+                        {regimeLabel(state?.strategy_regime ?? latest.strategy_regime)}
+                      </span>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Fresh signal</dt>
+                    <dd>{state?.is_new_long_signal ? "yes" : "no"}</dd>
+                  </div>
+                  <div>
+                    <dt>Signal time</dt>
+                    <dd>{fmtDateTime(latest.signal_time)}</dd>
+                  </div>
+                  <div>
+                    <dt>Generated at</dt>
+                    <dd>{fmtDateTime(latest.generated_at)}</dd>
+                  </div>
+                  <div>
+                    <dt>Strategy</dt>
+                    <dd>
+                      {latest.symbol} {latest.timeframe} · {latest.strategy_id}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Execution</dt>
+                    <dd className="slb-exec-off">disabled</dd>
+                  </div>
+                </dl>
               </div>
-              <div>
-                <dt>Signal time</dt>
-                <dd>{fmtDateTime(latest.signal_time)}</dd>
+
+              {/* B. Market snapshot card */}
+              <div className="slb-card">
+                <div className="slb-card-head">
+                  <span className="slb-card-title">Market snapshot</span>
+                </div>
+                <dl className="slb-kv slb-kv-wide">
+                  <div>
+                    <dt>Close</dt>
+                    <dd>{fmtCell(snapshot?.close_price ?? latest.close_price)}</dd>
+                  </div>
+                  <div>
+                    <dt>ATR</dt>
+                    <dd>{fmtCell(snapshot?.atr_value ?? latest.atr_value)}</dd>
+                  </div>
+                  <div>
+                    <dt>Spread points</dt>
+                    <dd>{fmtCell(snapshot?.spread_points)}</dd>
+                  </div>
+                  <div>
+                    <dt>Latest closed candle</dt>
+                    <dd>{fmtDateTime(snapshot?.latest_closed_candle_time)}</dd>
+                  </div>
+                  <div>
+                    <dt>Previous closed candle</dt>
+                    <dd>{fmtDateTime(snapshot?.previous_closed_candle_time)}</dd>
+                  </div>
+                  {isDonchian ? (
+                    <>
+                      <div>
+                        <dt>Donchian high</dt>
+                        <dd>{fmtCell(state?.donchian_high)}</dd>
+                      </div>
+                      <div>
+                        <dt>Donchian low</dt>
+                        <dd>{fmtCell(state?.donchian_low)}</dd>
+                      </div>
+                      <div>
+                        <dt>Donchian position</dt>
+                        <dd>{fmtCell(state?.donchian_position)}</dd>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div>
+                        <dt>SuperTrend value</dt>
+                        <dd>{fmtCell(state?.supertrend_value)}</dd>
+                      </div>
+                      <div>
+                        <dt>SuperTrend distance (ATR)</dt>
+                        <dd>{fmtCell(state?.supertrend_distance_atr)}</dd>
+                      </div>
+                    </>
+                  )}
+                </dl>
               </div>
-              <div>
-                <dt>Generated at</dt>
-                <dd>{fmtDateTime(latest.generated_at)}</dd>
+
+              {/* C. Trading plan card */}
+              <div className="slb-card">
+                <div className="slb-card-head">
+                  <span className="slb-card-title">Trading plan (reference only)</span>
+                </div>
+                {isBuy ? (
+                  <>
+                    <dl className="slb-kv slb-kv-wide">
+                      <div>
+                        <dt>Reference entry price</dt>
+                        <dd>{fmtCell(plan?.reference_entry_price)}</dd>
+                      </div>
+                      <div>
+                        <dt>Initial stop price</dt>
+                        <dd>{fmtCell(plan?.initial_stop_price)}</dd>
+                      </div>
+                      <div>
+                        <dt>Trailing stop reference</dt>
+                        <dd>{fmtCell(plan?.trailing_stop_reference)}</dd>
+                      </div>
+                      <div>
+                        <dt>Take profit</dt>
+                        <dd>
+                          {plan?.take_profit_price == null
+                            ? "none"
+                            : fmtCell(plan.take_profit_price)}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Risk distance (per unit)</dt>
+                        <dd>{fmtCell(plan?.risk_per_unit)}</dd>
+                      </div>
+                      <div>
+                        <dt>Risk amount</dt>
+                        <dd>{fmtCell(plan?.risk_amount)}</dd>
+                      </div>
+                      <div>
+                        <dt>Suggested lot reference</dt>
+                        <dd>{fmtLot(plan?.suggested_lot)}</dd>
+                      </div>
+                      <div>
+                        <dt>Account equity reference</dt>
+                        <dd>{fmtCell(plan?.account_equity_reference)}</dd>
+                      </div>
+                      {equitySourceLabel ? (
+                        <div>
+                          <dt>Equity source</dt>
+                          <dd>{equitySourceLabel}</dd>
+                        </div>
+                      ) : null}
+                    </dl>
+                    <p className="slb-plan-note">
+                      Reference only. No order is sent, modified or closed.
+                      “Suggested lot reference” is sizing guidance, not an order
+                      instruction.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="slb-card-reason">
+                      No new entry on the latest closed candle.
+                    </p>
+                    <dl className="slb-kv slb-kv-wide">
+                      <div>
+                        <dt>Why no entry</dt>
+                        <dd>{plan?.reason_human ?? latest.reason_human ?? latest.reason}</dd>
+                      </div>
+                      {plan?.next_condition ? (
+                        <div>
+                          <dt>Next condition required</dt>
+                          <dd>{plan.next_condition}</dd>
+                        </div>
+                      ) : null}
+                      {plan?.trailing_stop_reference != null ? (
+                        <div>
+                          <dt>Trailing stop reference (informational)</dt>
+                          <dd>{fmtCell(plan.trailing_stop_reference)}</dd>
+                        </div>
+                      ) : null}
+                    </dl>
+                    <p className="slb-plan-note">
+                      Reference only. No entry price is shown because there is no
+                      new entry signal.
+                    </p>
+                  </>
+                )}
               </div>
-              <div>
-                <dt>Symbol</dt>
-                <dd>{latest.symbol}</dd>
-              </div>
-              <div>
-                <dt>Timeframe</dt>
-                <dd>{latest.timeframe}</dd>
-              </div>
-              <div>
-                <dt>Strategy</dt>
-                <dd>{latest.strategy_id}</dd>
-              </div>
-              <div>
-                <dt>Close price</dt>
-                <dd>{fmtCell(latest.close_price)}</dd>
-              </div>
-              <div>
-                <dt>ATR</dt>
-                <dd>{fmtCell(latest.atr_value)}</dd>
-              </div>
-              <div>
-                <dt>Reason</dt>
-                <dd>{latest.reason}</dd>
-              </div>
-              <div>
-                <dt>Status</dt>
-                <dd>{latest.status}</dd>
-              </div>
-              <div>
-                <dt>Execution enabled</dt>
-                <dd className="slb-exec-off">
-                  {String(latest.execution_enabled)}
-                </dd>
-              </div>
-            </dl>
+            </div>
           </>
         ) : (
           <p className="slb-hint">No signal yet. Run a check or start polling.</p>
         )}
       </div>
 
-      {/* E. Signal history */}
+      {/* D. Recent checks: what happened over the last several candles */}
+      <div className="slb-section">
+        <h3 className="slb-section-title">Recent checks (last closed candles)</h3>
+        {recentChecks.length === 0 ? (
+          <p className="slb-hint">
+            No recent checks yet. Run <strong>Check once</strong> or start polling
+            to see diagnostics over the last several closed candles.
+          </p>
+        ) : (
+          <div className="slb-table-wrap">
+            <table className="slb-table">
+              <thead>
+                <tr>
+                  <th>Signal time</th>
+                  <th>Close</th>
+                  <th>ATR</th>
+                  <th>Regime</th>
+                  <th>Signal</th>
+                  <th>Reason</th>
+                  <th>{isDonchian ? "Donchian high" : "SuperTrend"}</th>
+                  <th>Trailing ref</th>
+                  <th>Entry / stop (BUY)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recentChecks.map((row) => (
+                  <tr key={row.signal_time}>
+                    <td>{fmtDateTime(row.signal_time)}</td>
+                    <td>{fmtCell(row.close_price)}</td>
+                    <td>{fmtCell(row.atr_value)}</td>
+                    <td>
+                      <span className={regimeClass(row.strategy_regime)}>
+                        {regimeLabel(row.strategy_regime)}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={signalClass(row.signal_type)}>
+                        {signalLabel(row.signal_type)}
+                      </span>
+                    </td>
+                    <td>{row.reason}</td>
+                    <td>
+                      {fmtCell(
+                        isDonchian ? row.donchian_high : row.supertrend_value,
+                      )}
+                    </td>
+                    <td>{fmtCell(row.trailing_stop_reference)}</td>
+                    <td>
+                      {row.is_long_signal
+                        ? `${fmtCell(row.close_price)} / ${fmtCell(row.initial_stop_reference)}`
+                        : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* E. Signal history (official emitted signals) */}
       <div className="slb-section">
         <h3 className="slb-section-title">Signal history</h3>
         {history.length === 0 ? (
@@ -472,12 +730,12 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
                 <tr>
                   <th>Generated at</th>
                   <th>Signal time</th>
-                  <th>Symbol</th>
-                  <th>TF</th>
-                  <th>Strategy</th>
                   <th>Signal</th>
                   <th>Reason</th>
                   <th>Close</th>
+                  <th>Entry ref</th>
+                  <th>Initial stop</th>
+                  <th>Suggested lot</th>
                   <th>Exec</th>
                 </tr>
               </thead>
@@ -486,22 +744,16 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
                   <tr key={row.signal_id}>
                     <td>{fmtDateTime(row.generated_at)}</td>
                     <td>{fmtDateTime(row.signal_time)}</td>
-                    <td>{row.symbol}</td>
-                    <td>{row.timeframe}</td>
-                    <td>{row.strategy_id}</td>
                     <td>
-                      <span
-                        className={
-                          row.signal_type === "BUY"
-                            ? "slb-signal slb-signal-buy"
-                            : "slb-signal slb-signal-none"
-                        }
-                      >
-                        {row.signal_type}
+                      <span className={signalClass(row.signal_type)}>
+                        {signalLabel(row.signal_type)}
                       </span>
                     </td>
                     <td>{row.reason}</td>
                     <td>{fmtCell(row.close_price)}</td>
+                    <td>{fmtCell(row.reference_entry_price)}</td>
+                    <td>{fmtCell(row.initial_stop_price)}</td>
+                    <td>{fmtLot(row.suggested_lot)}</td>
                     <td className="slb-exec-off">{String(row.execution_enabled)}</td>
                   </tr>
                 ))}

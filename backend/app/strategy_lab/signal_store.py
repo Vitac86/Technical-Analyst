@@ -10,8 +10,11 @@ Files written:
       processed ``signal_time`` and last emitted ``signal_id`` (one-signal-per-
       candle deduplication).
     * ``signals.csv``        -- append-only log of emitted signals, one row per
-      processed closed candle (stable :data:`SIGNAL_FIELDS` columns).
-    * ``latest_signal.json`` -- the most recently emitted signal record.
+      processed closed candle (flattened :data:`SIGNAL_CSV_FIELDS` columns).
+    * ``latest_signal.json`` -- the most recently emitted *enriched* signal record
+      (full ``market_snapshot`` / ``strategy_state`` / ``trading_plan`` objects).
+    * ``recent_checks.json`` -- per-candle diagnostics over the latest N closed
+      candles (a display aid; emits no official signal).
 
 The same files are read back by the optional read-only signals API.
 """
@@ -27,9 +30,12 @@ from typing import Optional
 import pandas as pd
 
 try:  # package import
-    from .mt5_signal_bridge import SIGNAL_FIELDS
+    from .mt5_signal_bridge import SIGNAL_CSV_FIELDS, flatten_signal_for_csv
 except ImportError:  # script import
-    from mt5_signal_bridge import SIGNAL_FIELDS  # type: ignore[no-redef]
+    from mt5_signal_bridge import (  # type: ignore[no-redef]
+        SIGNAL_CSV_FIELDS,
+        flatten_signal_for_csv,
+    )
 
 # Repo root: signal_store.py -> strategy_lab -> app -> backend -> ROOT
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -38,6 +44,7 @@ DEFAULT_OUTPUT_DIR = REPO_ROOT / "MetaTrader_Data" / "reports" / "mt5_signal_bri
 STATE_FILENAME = "state.json"
 SIGNALS_FILENAME = "signals.csv"
 LATEST_FILENAME = "latest_signal.json"
+RECENT_CHECKS_FILENAME = "recent_checks.json"
 
 # Env override lets the bridge and the API agree on a non-default location.
 _ENV_OUTPUT_DIR = "MT5_SIGNAL_BRIDGE_DIR"
@@ -58,6 +65,7 @@ class SignalStore:
         self.state_path = self.output_dir / STATE_FILENAME
         self.signals_path = self.output_dir / SIGNALS_FILENAME
         self.latest_path = self.output_dir / LATEST_FILENAME
+        self.recent_checks_path = self.output_dir / RECENT_CHECKS_FILENAME
 
     # -- keys ---------------------------------------------------------------
     @staticmethod
@@ -116,17 +124,54 @@ class SignalStore:
         self._save_state(state)
 
     def _append_signal_row(self, signal: dict) -> None:
+        row = flatten_signal_for_csv(signal)
         write_header = not self.signals_path.exists()
         with self.signals_path.open("a", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(SIGNAL_FIELDS))
+            writer = csv.DictWriter(handle, fieldnames=list(SIGNAL_CSV_FIELDS))
             if write_header:
                 writer.writeheader()
-            writer.writerow({field: signal.get(field) for field in SIGNAL_FIELDS})
+            writer.writerow({field: row.get(field) for field in SIGNAL_CSV_FIELDS})
 
     def write_latest(self, signal: dict) -> None:
-        """Overwrite ``latest_signal.json`` with the most recent signal."""
+        """Overwrite ``latest_signal.json`` with the most recent enriched signal."""
         with self.latest_path.open("w", encoding="utf-8") as handle:
             json.dump(signal, handle, indent=2)
+
+    # -- recent checks (per-candle diagnostics; not official signals) --------
+    def write_recent_checks(self, payload: dict) -> None:
+        """Overwrite ``recent_checks.json`` with the latest per-candle diagnostics."""
+        with self.recent_checks_path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+
+    def read_recent_checks(self, limit: Optional[int] = None) -> dict:
+        """Return the stored recent-candle diagnostics (newest first).
+
+        Returns an empty skeleton (``{"checks": []}``) when no checks have been
+        written yet, so callers never have to special-case a missing file.
+        """
+        empty = {
+            "generated_at": None,
+            "symbol": None,
+            "timeframe": None,
+            "strategy_id": None,
+            "checks": [],
+        }
+        if not self.recent_checks_path.exists():
+            return empty
+        try:
+            with self.recent_checks_path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            return empty
+        if not isinstance(payload, dict):
+            return empty
+        checks = payload.get("checks")
+        if not isinstance(checks, list):
+            checks = []
+        if limit is not None and limit >= 0:
+            checks = checks[:limit]
+        payload["checks"] = checks
+        return payload
 
     # -- reading (used by the read-only signals API) ------------------------
     def read_latest(self) -> Optional[dict]:

@@ -45,6 +45,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
+import numpy as np
 import pandas as pd
 
 try:  # package import
@@ -93,7 +94,21 @@ DEFAULT_BARS: int = 500
 SUGGESTED_ENTRY_REFERENCE: str = "next_bar_open_or_market"
 SIGNAL_STATUS: str = "signal_only"
 
-# Stable field order for the emitted signal record (also the signals.csv header).
+# v1.7.2 enriched trading plan: a *reference* entry, never an order instruction.
+REFERENCE_ENTRY_TYPE: str = "next_bar_open_or_market_reference"
+
+# Recent-candle diagnostics (signal-only): how many closed candles to report.
+DEFAULT_RECENT_LIMIT: int = 10
+MAX_RECENT_LIMIT: int = 100
+
+# Fallbacks used only when MT5 symbol/account specs are unavailable (e.g. tests
+# or an offline check). In live use these come from MT5 symbol_info/account_info.
+DEFAULT_CONTRACT_SIZE: float = 100.0  # XAUUSD: 100 oz per 1.00 lot.
+DEFAULT_LOT_STEP: float = 0.01
+
+# Stable field order for the *full* emitted signal record's flat identity fields.
+# The enriched record also carries nested ``market_snapshot`` / ``strategy_state``
+# / ``trading_plan`` objects (see :func:`build_signal_record`).
 SIGNAL_FIELDS: tuple[str, ...] = (
     "signal_id",
     "generated_at",
@@ -111,6 +126,29 @@ SIGNAL_FIELDS: tuple[str, ...] = (
     "trailing_stop_atr",
     "take_profit_atr",
     "status",
+    "execution_enabled",
+)
+
+# Flattened columns for signals.csv: key identity fields plus the most useful
+# trading-plan references (no order is ever placed -- these are signal-only).
+SIGNAL_CSV_FIELDS: tuple[str, ...] = (
+    "signal_id",
+    "generated_at",
+    "signal_time",
+    "symbol",
+    "timeframe",
+    "strategy_id",
+    "signal_type",
+    "reason",
+    "close_price",
+    "atr_value",
+    "strategy_regime",
+    "reference_entry_price",
+    "initial_stop_price",
+    "trailing_stop_reference",
+    "take_profit_price",
+    "risk_percent",
+    "suggested_lot",
     "execution_enabled",
 )
 
@@ -314,29 +352,118 @@ def _clean_float(value: object) -> Optional[float]:
     return number
 
 
-def build_signal_record(
-    config: dict,
-    closed_df: pd.DataFrame,
-    *,
-    symbol: str,
-    generated_at: Optional[datetime] = None,
-) -> dict:
-    """Compute the v1.7 signal record for the latest closed candle.
+def _classify_signal(sig: int, raw_reason: str) -> tuple[str, str]:
+    """Long-only mapping: only a fresh long entry (signal == 1) is a BUY alert.
 
-    ``closed_df`` must already exclude the forming candle
-    (see :func:`select_closed_candles`). Signal generation is delegated to
-    :func:`app.strategy_lab.presets.generate_signals` so it is identical to the
-    Strategy Lab backtester.
+    A bearish flip/breakout is reported as NONE with an ``_ignored_long_only``
+    reason so the diagnostics still explain *why* there was no entry.
     """
-    assert_signal_only()
+    if sig == 1:
+        return "BUY", raw_reason or "long_entry"
+    if sig == -1 and raw_reason:
+        return "NONE", f"{raw_reason}_ignored_long_only"
+    return "NONE", raw_reason or "no_entry"
 
-    strategy_id = config["strategy_id"]
-    timeframe = str(config["timeframe"]).upper()
-    preset = presets.get_preset(strategy_id)
 
+def humanize_reason(reason: str, signal_type: str, family: str) -> str:
+    """A plain-English explanation of a signal/no-signal for the UI."""
+    if signal_type == "BUY":
+        if family == "supertrend":
+            return "SuperTrend flipped bullish on the latest closed candle — fresh long entry signal."
+        if family == "donchian":
+            return "Price closed above the Donchian channel high — fresh long breakout signal."
+        return "Fresh long entry signal on the latest closed candle."
+    if "ignored_long_only" in reason:
+        if family == "supertrend":
+            return "SuperTrend flipped bearish (long-only: no short taken, so no entry)."
+        if family == "donchian":
+            return "Price broke below the Donchian channel low (long-only: no short taken, so no entry)."
+        return "Bearish signal ignored (long-only: no entry)."
+    if family == "supertrend":
+        return "No fresh SuperTrend bullish flip on the latest closed candle — no new entry."
+    if family == "donchian":
+        return "No Donchian breakout above the channel high on the latest closed candle — no new entry."
+    return "No new entry on the latest closed candle."
+
+
+def next_long_condition(family: str) -> str:
+    """The human-readable condition needed for the next BUY signal."""
+    if family == "supertrend":
+        return "A SuperTrend bullish flip — a closed candle whose close crosses above the SuperTrend line."
+    if family == "donchian":
+        return "A close above the Donchian channel high (the rolling breakout level) on a closed candle."
+    return "A fresh long entry condition on a closed candle."
+
+
+def empty_market_context() -> dict:
+    """A market context with everything unknown (used when MT5 specs are absent)."""
+    return {
+        "account_equity": None,
+        "contract_size": None,
+        "point_value": None,
+        "lot_step": None,
+        "spread_points": None,
+    }
+
+
+def read_market_context(mt5, symbol: str) -> dict:  # type: ignore[no-untyped-def]
+    """Read account equity + symbol specs from MT5, read-only and best-effort.
+
+    Never places, modifies or closes anything: it only reads ``account_info``
+    (for equity) and ``symbol_info`` (for contract size / lot step / spread).
+    Any missing field stays ``None`` and the caller falls back to config values.
+    """
+    context = empty_market_context()
+
+    account_info = getattr(mt5, "account_info", None)
+    if callable(account_info):
+        try:
+            info = account_info()
+        except Exception:  # pragma: no cover - defensive, broker-dependent
+            info = None
+        if info is not None:
+            context["account_equity"] = _clean_float(getattr(info, "equity", None))
+
+    symbol_info = getattr(mt5, "symbol_info", None)
+    if callable(symbol_info):
+        try:
+            spec = symbol_info(symbol)
+        except Exception:  # pragma: no cover - defensive, broker-dependent
+            spec = None
+        if spec is not None:
+            contract_size = _clean_float(getattr(spec, "trade_contract_size", None))
+            point = _clean_float(getattr(spec, "point", None))
+            context["contract_size"] = contract_size
+            context["lot_step"] = _clean_float(getattr(spec, "volume_step", None))
+            context["spread_points"] = _clean_float(getattr(spec, "spread", None))
+            if contract_size is not None and point is not None:
+                context["point_value"] = _clean_float(contract_size * point)
+    return context
+
+
+def _round_down_to_step(value: float, step: float) -> float:
+    """Round ``value`` down to the nearest ``step`` (e.g. a broker lot step)."""
+    if step <= 0:
+        return float(value)
+    steps = math.floor(value / step + 1e-9)
+    text = f"{step:.10f}".rstrip("0")
+    decimals = len(text.split(".")[1]) if "." in text else 0
+    return round(steps * step, decimals)
+
+
+# ---------------------------------------------------------------------------
+# Per-candle diagnostics (computed once, reused by the signal + recent checks)
+# ---------------------------------------------------------------------------
+def compute_diagnostics(config: dict, closed_df: pd.DataFrame) -> pd.DataFrame:
+    """Build a per-closed-candle diagnostics frame for a config.
+
+    Reuses :func:`presets.generate_signals` and :mod:`indicators` (no duplicated
+    strategy/indicator logic) and adds the strategy-state columns the UI needs:
+    ``regime`` plus SuperTrend (D) or Donchian (C) levels. The latest signal and
+    the recent-checks table both slice rows from this single frame.
+    """
+    preset = presets.get_preset(config["strategy_id"])
     strategy_params = dict(config.get("strategy_parameters", {}))
-    exit_params = dict(config.get("exit_parameters", {}))
-    risk_params = dict(config.get("risk_parameters", {}))
 
     signals = presets.generate_signals(preset, closed_df, strategy_params)
     stop_period = int(
@@ -344,50 +471,478 @@ def build_signal_record(
     )
     atr_series = indicators.atr(closed_df, stop_period)
 
-    sig = int(signals["signal"].iloc[-1])
-    raw_reason = str(signals["signal_reason"].iloc[-1] or "")
-    signal_time = pd.Timestamp(closed_df["datetime"].iloc[-1])
+    diag = pd.DataFrame(
+        {
+            "datetime": closed_df["datetime"].to_numpy(),
+            "open": closed_df["open"].to_numpy(),
+            "high": closed_df["high"].to_numpy(),
+            "low": closed_df["low"].to_numpy(),
+            "close": closed_df["close"].to_numpy(),
+            "atr": atr_series.to_numpy(),
+            "signal": signals["signal"].to_numpy(),
+            "signal_reason": signals["signal_reason"].to_numpy(),
+        }
+    )
+    if "spread" in closed_df.columns:
+        diag["spread"] = closed_df["spread"].to_numpy()
 
-    # Long-only: only a fresh long entry (signal == 1) becomes a BUY alert.
-    if sig == 1:
-        signal_type = "BUY"
-        reason = raw_reason or "long_entry"
-    else:
-        signal_type = "NONE"
-        if sig == -1 and raw_reason:
-            reason = f"{raw_reason}_ignored_long_only"
-        else:
-            reason = raw_reason or "no_entry"
+    if preset.family == "supertrend":
+        _add_supertrend_state(diag, closed_df, preset, strategy_params)
+    elif preset.family == "donchian":
+        _add_donchian_state(diag, closed_df, preset, strategy_params)
+    else:  # pragma: no cover - defensive; validate_config blocks other families
+        diag["regime"] = "unknown"
+    return diag
 
-    # Map exit params to the output schema (C uses stop_loss_atr; D uses
-    # initial_stop_loss_atr + trailing_stop_atr).
-    initial_stop_loss_atr = exit_params.get(
-        "initial_stop_loss_atr", exit_params.get("stop_loss_atr")
+
+def _add_supertrend_state(
+    diag: pd.DataFrame, closed_df: pd.DataFrame, preset, strategy_params: dict
+) -> None:
+    """Attach SuperTrend value/regime/distance columns (finalist D)."""
+    st = indicators.supertrend(
+        closed_df,
+        atr_period=int(strategy_params.get("atr_period", preset.defaults["atr_period"])),
+        multiplier=float(strategy_params.get("multiplier", preset.defaults["multiplier"])),
+    )
+    direction = st["direction"].to_numpy()
+    diag["supertrend"] = st["supertrend"].to_numpy()
+    diag["supertrend_distance_atr"] = (diag["close"] - diag["supertrend"]) / diag["atr"]
+    regime = np.where(direction == 1, "bullish", np.where(direction == -1, "bearish", "unknown"))
+    diag["regime"] = regime.astype(object)
+
+
+def _add_donchian_state(
+    diag: pd.DataFrame, closed_df: pd.DataFrame, preset, strategy_params: dict
+) -> None:
+    """Attach Donchian high/low/position/regime columns (finalist C).
+
+    The channel is the *previous* bar's rolling high/low (the breakout level the
+    current close must clear), matching :func:`strategies.donchian_breakout_strategy`.
+    """
+    channel = indicators.donchian_channel(
+        closed_df,
+        lookback=int(strategy_params.get("lookback", preset.defaults["lookback"])),
+    )
+    prev_upper = channel["upper"].shift(1).to_numpy()
+    prev_lower = channel["lower"].shift(1).to_numpy()
+    close = diag["close"].to_numpy()
+
+    diag["donchian_high"] = prev_upper
+    diag["donchian_low"] = prev_lower
+    width = prev_upper - prev_lower
+    with np.errstate(invalid="ignore", divide="ignore"):
+        position = np.where(width > 0, (close - prev_lower) / width, np.nan)
+    diag["donchian_position"] = position
+
+    known = ~(np.isnan(prev_upper) | np.isnan(prev_lower))
+    regime = np.full(len(diag), "unknown", dtype=object)
+    regime[known & (close > prev_upper)] = "bullish"
+    regime[known & (close < prev_lower)] = "bearish"
+    regime[known & (close <= prev_upper) & (close >= prev_lower)] = "neutral"
+    diag["regime"] = regime
+
+
+def _bars_since_last_long(diag: pd.DataFrame) -> Optional[int]:
+    """Closed candles since the most recent long signal (0 == this candle)."""
+    longs = np.where(diag["signal"].to_numpy() == 1)[0]
+    if len(longs) == 0:
+        return None
+    return int(len(diag) - 1 - longs[-1])
+
+
+def _resolve_equity(context: dict, risk_params: dict) -> tuple[Optional[float], str]:
+    """Account equity reference + its source (MT5 equity beats config equity)."""
+    equity = _clean_float(context.get("account_equity"))
+    if equity is not None:
+        return equity, "mt5_account_equity"
+    config_equity = _clean_float(risk_params.get("initial_equity"))
+    if config_equity is not None:
+        return config_equity, "config_initial_equity"
+    return None, "unavailable"
+
+
+def _resolve_spread(context: dict, last_row: pd.Series) -> Optional[float]:
+    """Spread points from MT5 symbol_info, else the candle's spread, else None."""
+    spread = _clean_float(context.get("spread_points"))
+    if spread is not None:
+        return spread
+    if "spread" in last_row.index:
+        return _clean_float(last_row["spread"])
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Trading plan (signal-only REFERENCE -- never an order instruction)
+# ---------------------------------------------------------------------------
+_BUY_NOTE = (
+    "Signal-only reference. No order is sent, modified or closed. "
+    "reference_entry_price is the latest closed price used as a conservative "
+    "reference — the live next-bar open / actual fill is not guaranteed."
+)
+_NONE_NOTE = (
+    "Signal-only reference. No new entry on the latest closed candle; "
+    "no order is sent."
+)
+
+
+def build_trading_plan(
+    *,
+    signal_type: str,
+    family: str,
+    reason: str,
+    close_price: Optional[float],
+    atr_value: Optional[float],
+    regime: str,
+    initial_stop_loss_atr: Optional[float],
+    trailing_stop_atr: Optional[float],
+    take_profit_atr: Optional[float],
+    risk_percent: Optional[float],
+    account_equity: Optional[float],
+    account_equity_source: str,
+    contract_size: Optional[float],
+    point_value: Optional[float],
+    lot_step: Optional[float],
+) -> dict:
+    """Build the reference trading plan for a BUY or a NONE.
+
+    Everything is a *reference* for a signal-only workflow; no order is ever
+    placed. For NONE there is deliberately no entry/stop (only an optional
+    informational trailing reference when the regime is already bullish).
+    """
+    contract = contract_size if contract_size is not None else DEFAULT_CONTRACT_SIZE
+    step = lot_step if (lot_step and lot_step > 0) else DEFAULT_LOT_STEP
+
+    can_trail = (
+        trailing_stop_atr is not None and close_price is not None and atr_value is not None
+    )
+    trailing_reference = (
+        _clean_float(close_price - trailing_stop_atr * atr_value) if can_trail else None
+    )
+
+    plan = {
+        "reference_entry_type": None,
+        "reference_entry_price": None,
+        "initial_stop_price": None,
+        "trailing_stop_reference": None,
+        "take_profit_price": None,
+        "risk_per_unit": None,
+        "risk_percent": _clean_float(risk_percent),
+        "account_equity_reference": _clean_float(account_equity),
+        "account_equity_source": account_equity_source,
+        "risk_amount": None,
+        "suggested_lot": None,
+        "contract_size": _clean_float(contract),
+        "point_value": _clean_float(point_value),
+        "lot_step": _clean_float(step),
+        "reason_human": humanize_reason(reason, signal_type, family),
+        "notes": _NONE_NOTE,
+    }
+
+    if signal_type != "BUY":
+        # Only surface a trailing reference when already in a bullish regime; never
+        # invent an entry price when there is no entry.
+        plan["trailing_stop_reference"] = trailing_reference if regime == "bullish" else None
+        plan["next_condition"] = next_long_condition(family)
+        return plan
+
+    entry = close_price
+    initial_stop = (
+        _clean_float(entry - initial_stop_loss_atr * atr_value)
+        if (entry is not None and initial_stop_loss_atr is not None and atr_value is not None)
+        else None
+    )
+    take_profit = (
+        _clean_float(entry + take_profit_atr * atr_value)
+        if (entry is not None and take_profit_atr is not None and atr_value is not None)
+        else None
+    )
+    risk_per_unit = (
+        _clean_float(entry - initial_stop)
+        if (entry is not None and initial_stop is not None)
+        else None
+    )
+    risk_amount = (
+        _clean_float(account_equity * risk_percent / 100.0)
+        if (account_equity is not None and risk_percent is not None)
+        else None
+    )
+    suggested_lot = None
+    if risk_amount is not None and risk_per_unit and risk_per_unit > 0 and contract > 0:
+        raw_lot = risk_amount / (risk_per_unit * contract)
+        suggested_lot = _round_down_to_step(raw_lot, step)
+
+    plan.update(
+        {
+            "reference_entry_type": REFERENCE_ENTRY_TYPE,
+            "reference_entry_price": entry,
+            "initial_stop_price": initial_stop,
+            "trailing_stop_reference": trailing_reference,
+            "take_profit_price": take_profit,
+            "risk_per_unit": risk_per_unit,
+            "risk_amount": risk_amount,
+            "suggested_lot": suggested_lot,
+            "notes": _BUY_NOTE,
+        }
+    )
+    return plan
+
+
+# ---------------------------------------------------------------------------
+# Signal record (latest closed candle) + recent-candle diagnostics
+# ---------------------------------------------------------------------------
+def build_signal_record(
+    config: dict,
+    closed_df: pd.DataFrame,
+    *,
+    symbol: str,
+    generated_at: Optional[datetime] = None,
+    market_context: Optional[dict] = None,
+) -> dict:
+    """Compute the enriched v1.7.2 signal record for the latest closed candle.
+
+    ``closed_df`` must already exclude the forming candle
+    (see :func:`select_closed_candles`). Signal generation is delegated to
+    :func:`presets.generate_signals` so it stays identical to the backtester.
+    The record stays signal-only: ``execution_enabled`` is always ``False`` and
+    the ``trading_plan`` is a labelled reference, never an order.
+    """
+    assert_signal_only()
+    diag = compute_diagnostics(config, closed_df)
+    return _record_from_diagnostics(
+        config,
+        diag,
+        symbol=symbol,
+        generated_at=generated_at,
+        market_context=market_context or empty_market_context(),
+    )
+
+
+def _record_from_diagnostics(
+    config: dict,
+    diag: pd.DataFrame,
+    *,
+    symbol: str,
+    generated_at: Optional[datetime],
+    market_context: dict,
+) -> dict:
+    preset = presets.get_preset(config["strategy_id"])
+    family = preset.family
+    timeframe = str(config["timeframe"]).upper()
+    exit_params = dict(config.get("exit_parameters", {}))
+    risk_params = dict(config.get("risk_parameters", {}))
+
+    last = diag.iloc[-1]
+    sig = int(last["signal"])
+    raw_reason = str(last["signal_reason"] or "")
+    signal_type, reason = _classify_signal(sig, raw_reason)
+    signal_time = pd.Timestamp(last["datetime"])
+
+    close_price = _clean_float(last["close"])
+    atr_value = _clean_float(last["atr"])
+    regime = str(last["regime"]) if "regime" in diag.columns else "unknown"
+
+    # C uses stop_loss_atr; D uses initial_stop_loss_atr + trailing_stop_atr.
+    initial_stop_loss_atr = _clean_float(
+        exit_params.get("initial_stop_loss_atr", exit_params.get("stop_loss_atr"))
+    )
+    trailing_stop_atr = _clean_float(exit_params.get("trailing_stop_atr"))
+    take_profit_atr = _clean_float(exit_params.get("take_profit_atr"))
+    risk_percent = _clean_float(risk_params.get("risk_percent"))
+
+    equity, equity_source = _resolve_equity(market_context, risk_params)
+
+    previous_regime = (
+        str(diag["regime"].iloc[-2])
+        if (len(diag) >= 2 and "regime" in diag.columns)
+        else None
+    )
+    strategy_state = {
+        "strategy_regime": regime,
+        "previous_strategy_regime": previous_regime,
+        "is_new_long_signal": signal_type == "BUY",
+        "bars_since_last_long_signal": _bars_since_last_long(diag),
+        "supertrend_value": _clean_float(last["supertrend"]) if "supertrend" in diag.columns else None,
+        "supertrend_distance_atr": (
+            _clean_float(last["supertrend_distance_atr"])
+            if "supertrend_distance_atr" in diag.columns
+            else None
+        ),
+        "donchian_high": _clean_float(last["donchian_high"]) if "donchian_high" in diag.columns else None,
+        "donchian_low": _clean_float(last["donchian_low"]) if "donchian_low" in diag.columns else None,
+        "donchian_position": (
+            _clean_float(last["donchian_position"]) if "donchian_position" in diag.columns else None
+        ),
+    }
+
+    market_snapshot = {
+        "close_price": close_price,
+        "open_price": _clean_float(last["open"]),
+        "high_price": _clean_float(last["high"]),
+        "low_price": _clean_float(last["low"]),
+        "atr_value": atr_value,
+        "spread_points": _resolve_spread(market_context, last),
+        "latest_closed_candle_time": signal_time.isoformat(),
+        "previous_closed_candle_time": (
+            pd.Timestamp(diag["datetime"].iloc[-2]).isoformat() if len(diag) >= 2 else None
+        ),
+    }
+
+    trading_plan = build_trading_plan(
+        signal_type=signal_type,
+        family=family,
+        reason=reason,
+        close_price=close_price,
+        atr_value=atr_value,
+        regime=regime,
+        initial_stop_loss_atr=initial_stop_loss_atr,
+        trailing_stop_atr=trailing_stop_atr,
+        take_profit_atr=take_profit_atr,
+        risk_percent=risk_percent,
+        account_equity=equity,
+        account_equity_source=equity_source,
+        contract_size=market_context.get("contract_size"),
+        point_value=market_context.get("point_value"),
+        lot_step=market_context.get("lot_step"),
     )
 
     generated_at = generated_at or datetime.now(timezone.utc)
     signal_id = (
-        f"{strategy_id}_{symbol}_{timeframe}_{signal_time.strftime('%Y%m%dT%H%M%S')}"
+        f"{config['strategy_id']}_{symbol}_{timeframe}_"
+        f"{signal_time.strftime('%Y%m%dT%H%M%S')}"
     )
 
     return {
+        # identity
         "signal_id": signal_id,
         "generated_at": generated_at.isoformat(),
         "symbol": symbol,
         "timeframe": timeframe,
-        "strategy_id": strategy_id,
+        "strategy_id": config["strategy_id"],
         "signal_time": signal_time.isoformat(),
         "signal_type": signal_type,
         "reason": reason,
-        "close_price": _clean_float(closed_df["close"].iloc[-1]),
-        "atr_value": _clean_float(atr_series.iloc[-1]),
-        "suggested_entry_reference": SUGGESTED_ENTRY_REFERENCE,
-        "risk_percent": _clean_float(risk_params.get("risk_percent")),
-        "initial_stop_loss_atr": _clean_float(initial_stop_loss_atr),
-        "trailing_stop_atr": _clean_float(exit_params.get("trailing_stop_atr")),
-        "take_profit_atr": _clean_float(exit_params.get("take_profit_atr")),
+        "reason_human": trading_plan["reason_human"],
         "status": SIGNAL_STATUS,
-        "execution_enabled": EXECUTION_ENABLED,  # always False in v1.7
+        "execution_enabled": EXECUTION_ENABLED,  # always False in v1.7.x
+        # flat fields kept for back-compat with earlier consumers + CSV history
+        "close_price": close_price,
+        "atr_value": atr_value,
+        "suggested_entry_reference": SUGGESTED_ENTRY_REFERENCE,
+        "risk_percent": risk_percent,
+        "initial_stop_loss_atr": initial_stop_loss_atr,
+        "trailing_stop_atr": trailing_stop_atr,
+        "take_profit_atr": take_profit_atr,
+        "strategy_regime": regime,
+        # enriched nested objects (v1.7.2)
+        "market_snapshot": market_snapshot,
+        "strategy_state": strategy_state,
+        "trading_plan": trading_plan,
+    }
+
+
+def build_recent_checks(
+    config: dict,
+    closed_df: pd.DataFrame,
+    *,
+    limit: int = DEFAULT_RECENT_LIMIT,
+    market_context: Optional[dict] = None,
+) -> list[dict]:
+    """Diagnostics for the latest ``limit`` closed candles (newest first).
+
+    This is a *display* aid: it never emits an official signal and never places
+    an order. It reuses the same :func:`compute_diagnostics` frame as the latest
+    signal, so the two can never disagree.
+    """
+    limit = max(1, min(int(limit), MAX_RECENT_LIMIT))
+    context = market_context or empty_market_context()
+    preset = presets.get_preset(config["strategy_id"])
+    family = preset.family
+    exit_params = dict(config.get("exit_parameters", {}))
+    initial_stop_loss_atr = _clean_float(
+        exit_params.get("initial_stop_loss_atr", exit_params.get("stop_loss_atr"))
+    )
+    trailing_stop_atr = _clean_float(exit_params.get("trailing_stop_atr"))
+
+    diag = compute_diagnostics(config, closed_df)
+    tail = diag.iloc[-limit:]
+
+    rows: list[dict] = []
+    for _, row in tail.iterrows():
+        sig = int(row["signal"])
+        raw_reason = str(row["signal_reason"] or "")
+        signal_type, reason = _classify_signal(sig, raw_reason)
+        close_price = _clean_float(row["close"])
+        atr_value = _clean_float(row["atr"])
+        regime = str(row["regime"]) if "regime" in diag.columns else "unknown"
+
+        trailing_reference = (
+            _clean_float(close_price - trailing_stop_atr * atr_value)
+            if (trailing_stop_atr is not None and close_price is not None and atr_value is not None)
+            else None
+        )
+        initial_stop_reference = (
+            _clean_float(close_price - initial_stop_loss_atr * atr_value)
+            if (
+                signal_type == "BUY"
+                and initial_stop_loss_atr is not None
+                and close_price is not None
+                and atr_value is not None
+            )
+            else None
+        )
+
+        rows.append(
+            {
+                "signal_time": pd.Timestamp(row["datetime"]).isoformat(),
+                "close_price": close_price,
+                "atr_value": atr_value,
+                "strategy_regime": regime,
+                "is_long_signal": signal_type == "BUY",
+                "signal_type": signal_type,
+                "reason": reason,
+                "reason_human": humanize_reason(reason, signal_type, family),
+                "supertrend_value": _clean_float(row["supertrend"]) if "supertrend" in diag.columns else None,
+                "donchian_high": _clean_float(row["donchian_high"]) if "donchian_high" in diag.columns else None,
+                "donchian_low": _clean_float(row["donchian_low"]) if "donchian_low" in diag.columns else None,
+                "initial_stop_reference": initial_stop_reference,
+                "trailing_stop_reference": trailing_reference,
+                "execution_enabled": EXECUTION_ENABLED,  # always False
+            }
+        )
+    rows.reverse()  # newest first
+    return rows
+
+
+def flatten_signal_for_csv(signal: dict) -> dict:
+    """Flatten an enriched signal record to the :data:`SIGNAL_CSV_FIELDS` columns.
+
+    Tolerates a minimal record (no nested ``trading_plan``/``strategy_state``):
+    missing references simply flatten to ``None``.
+    """
+    plan = signal.get("trading_plan") or {}
+    state = signal.get("strategy_state") or {}
+    risk_percent = signal.get("risk_percent")
+    if risk_percent is None:
+        risk_percent = plan.get("risk_percent")
+    return {
+        "signal_id": signal.get("signal_id"),
+        "generated_at": signal.get("generated_at"),
+        "signal_time": signal.get("signal_time"),
+        "symbol": signal.get("symbol"),
+        "timeframe": signal.get("timeframe"),
+        "strategy_id": signal.get("strategy_id"),
+        "signal_type": signal.get("signal_type"),
+        "reason": signal.get("reason"),
+        "close_price": signal.get("close_price"),
+        "atr_value": signal.get("atr_value"),
+        "strategy_regime": signal.get("strategy_regime") or state.get("strategy_regime"),
+        "reference_entry_price": plan.get("reference_entry_price"),
+        "initial_stop_price": plan.get("initial_stop_price"),
+        "trailing_stop_reference": plan.get("trailing_stop_reference"),
+        "take_profit_price": plan.get("take_profit_price"),
+        "risk_percent": risk_percent,
+        "suggested_lot": plan.get("suggested_lot"),
+        "execution_enabled": signal.get("execution_enabled"),
     }
 
 
@@ -415,27 +970,51 @@ def run_once(
     fetch_ohlc_fn: FetchOhlcFn,
     bars: int = DEFAULT_BARS,
     generated_at: Optional[datetime] = None,
+    recent_limit: int = DEFAULT_RECENT_LIMIT,
+    market_context: Optional[dict] = None,
 ) -> Optional[dict]:
     """Run one signal check.
 
-    Returns the emitted signal record, or ``None`` when the latest closed candle
-    has already been processed (one signal per candle -- no duplicates).
+    Always refreshes the recent-candle diagnostics (so the UI can show what
+    happened over the last several candles), then emits the official signal for
+    the latest closed candle. Returns the emitted signal record, or ``None`` when
+    that candle has already been processed (one signal per candle -- no
+    duplicates). Refreshing diagnostics never emits a second signal.
     """
     assert_signal_only()
 
     timeframe = str(config["timeframe"]).upper()
     strategy_id = config["strategy_id"]
+    generated_at = generated_at or datetime.now(timezone.utc)
 
     df = fetch_ohlc_fn(symbol, timeframe, bars)
     closed = select_closed_candles(df)
     signal_time = pd.Timestamp(closed["datetime"].iloc[-1])
+
+    checks = build_recent_checks(
+        config, closed, limit=recent_limit, market_context=market_context
+    )
+    store.write_recent_checks(
+        {
+            "generated_at": generated_at.isoformat(),
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "strategy_id": strategy_id,
+            "limit": len(checks),
+            "checks": checks,
+        }
+    )
 
     key = store.make_key(strategy_id, symbol, timeframe)
     if store.already_processed(key, signal_time):
         return None
 
     record = build_signal_record(
-        config, closed, symbol=symbol, generated_at=generated_at
+        config,
+        closed,
+        symbol=symbol,
+        generated_at=generated_at,
+        market_context=market_context,
     )
     store.record(key, record)
     return record

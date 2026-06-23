@@ -70,6 +70,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Polling interval in seconds when not using --once (default 60).",
     )
     parser.add_argument(
+        "--recent-limit",
+        type=int,
+        default=bridge.DEFAULT_RECENT_LIMIT,
+        help=(
+            "Closed candles of diagnostics to record per check "
+            f"(default {bridge.DEFAULT_RECENT_LIMIT}, max {bridge.MAX_RECENT_LIMIT})."
+        ),
+    )
+    parser.add_argument(
         "--symbol",
         default=None,
         help="Override the config symbol with the broker's exact MT5 name "
@@ -102,8 +111,17 @@ def _print_signal(record: dict) -> None:
     print(line)
 
 
-def _run_check(config: dict, store: SignalStore, symbol: str, fetch_ohlc_fn, bars: int) -> None:
-    """Evaluate one closed candle and report the outcome."""
+def _run_check(
+    config: dict,
+    store: SignalStore,
+    mt5,
+    symbol: str,
+    fetch_ohlc_fn,
+    bars: int,
+    recent_limit: int,
+) -> None:
+    """Evaluate one closed candle (refreshing recent diagnostics) and report it."""
+    market_context = bridge.read_market_context(mt5, symbol)
     record = bridge.run_once(
         config,
         store,
@@ -111,6 +129,8 @@ def _run_check(config: dict, store: SignalStore, symbol: str, fetch_ohlc_fn, bar
         fetch_ohlc_fn=fetch_ohlc_fn,
         bars=bars,
         generated_at=datetime.now(timezone.utc),
+        recent_limit=recent_limit,
+        market_context=market_context,
     )
     if record is None:
         print(f"No new closed candle / already processed ({_now()}).")
@@ -147,13 +167,17 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         if args.once or args.poll_seconds is None:
-            _run_check(config, store, symbol, fetch_ohlc_fn, args.bars)
+            _run_check(
+                config, store, mt5, symbol, fetch_ohlc_fn, args.bars, args.recent_limit
+            )
             return 0
 
         print(f"Polling every {args.poll_seconds}s. Press Ctrl-C to stop.")
         while True:
             try:
-                _run_check(config, store, symbol, fetch_ohlc_fn, args.bars)
+                _run_check(
+                    config, store, mt5, symbol, fetch_ohlc_fn, args.bars, args.recent_limit
+                )
             except bridge.BridgeError as exc:
                 # Don't kill a long-running poller on a transient data hiccup.
                 print(f"WARN: {exc}", file=sys.stderr)

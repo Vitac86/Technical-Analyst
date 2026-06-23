@@ -35,8 +35,40 @@ def d_config() -> dict:
 
 
 @pytest.fixture()
+def c_config() -> dict:
+    """A real exported v1.6 config for finalist C (Donchian H1)."""
+    return lab_service.export_config(preset_id=C_PRESET)
+
+
+@pytest.fixture()
 def store(tmp_path: Path) -> SignalStore:
     return SignalStore(tmp_path / "bridge")
+
+
+# A market context as a live MT5 terminal would supply (read-only specs).
+MARKET_CONTEXT = {
+    "account_equity": 12500.0,
+    "contract_size": 100.0,
+    "point_value": 1.0,
+    "lot_step": 0.01,
+    "spread_points": 25.0,
+}
+
+
+def _donchian_series(n: int = 300) -> pd.DataFrame:
+    """A steady XAUUSD-like H1 uptrend that produces Donchian breakouts."""
+    times = pd.date_range("2020-01-01", periods=n, freq="1h")  # naive, UTC-like
+    close = np.linspace(1800.0, 2200.0, num=n)
+    wiggle = np.sin(np.arange(n) / 5.0) * 2.0
+    return pd.DataFrame(
+        {
+            "datetime": times,
+            "open": close - wiggle * 0.5,
+            "high": close + np.abs(wiggle) + 3.0,
+            "low": close - np.abs(wiggle) - 3.0,
+            "close": close,
+        }
+    )
 
 
 def _supertrend_series(n: int = 400) -> pd.DataFrame:
@@ -374,3 +406,182 @@ def test_missing_mt5_package_message(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(builtins, "__import__", fake_import)
     with pytest.raises(bridge.BridgeError, match="pip install MetaTrader5"):
         bridge.load_mt5()
+
+
+# ---------------------------------------------------------------------------
+# v1.7.2: enriched trading plan (signal-only reference, never an order)
+# ---------------------------------------------------------------------------
+def _buy_record(d_config: dict) -> dict:
+    df = _supertrend_series()
+    k = _first_buy_index(df)
+    closed = bridge.select_closed_candles(df.iloc[: k + 2].reset_index(drop=True))
+    return bridge.build_signal_record(
+        d_config, closed, symbol="XAUUSD", market_context=MARKET_CONTEXT
+    )
+
+
+def _none_record(d_config: dict) -> dict:
+    df = _supertrend_series()
+    k = _first_buy_index(df)
+    closed = bridge.select_closed_candles(df.iloc[: k + 1].reset_index(drop=True))
+    return bridge.build_signal_record(
+        d_config, closed, symbol="XAUUSD", market_context=MARKET_CONTEXT
+    )
+
+
+def test_enriched_buy_has_trading_plan(d_config: dict) -> None:
+    rec = _buy_record(d_config)
+    assert rec["execution_enabled"] is False
+    assert rec["status"] == "signal_only"
+
+    plan = rec["trading_plan"]
+    assert plan["reference_entry_type"] == bridge.REFERENCE_ENTRY_TYPE
+    assert plan["reference_entry_price"] == rec["close_price"]
+    assert plan["initial_stop_price"] < plan["reference_entry_price"]
+    assert plan["trailing_stop_reference"] < rec["close_price"]
+    assert plan["risk_per_unit"] > 0
+    assert plan["risk_amount"] == pytest.approx(12500.0 * 0.01)
+    assert plan["suggested_lot"] is not None and plan["suggested_lot"] > 0
+    assert plan["account_equity_reference"] == 12500.0
+    assert plan["account_equity_source"] == "mt5_account_equity"
+    assert "signal-only" in plan["notes"].lower()
+
+    snapshot = rec["market_snapshot"]
+    assert snapshot["spread_points"] == 25.0
+    assert snapshot["latest_closed_candle_time"] == rec["signal_time"]
+    assert snapshot["previous_closed_candle_time"] is not None
+
+    state = rec["strategy_state"]
+    assert state["strategy_regime"] == "bullish"
+    assert state["is_new_long_signal"] is True
+    assert state["bars_since_last_long_signal"] == 0
+    assert state["supertrend_value"] is not None
+
+
+def test_enriched_none_has_plan_without_fake_entry(d_config: dict) -> None:
+    rec = _none_record(d_config)
+    assert rec["signal_type"] == "NONE"
+    assert rec["execution_enabled"] is False
+
+    plan = rec["trading_plan"]
+    assert plan is not None
+    # No fabricated entry / stop / size on a no-entry candle.
+    assert plan["reference_entry_type"] is None
+    assert plan["reference_entry_price"] is None
+    assert plan["initial_stop_price"] is None
+    assert plan["take_profit_price"] is None
+    assert plan["risk_per_unit"] is None
+    assert plan["risk_amount"] is None
+    assert plan["suggested_lot"] is None
+    # ... but it still explains why and what the next BUY needs.
+    assert plan["reason_human"]
+    assert plan["next_condition"]
+
+
+def test_none_trailing_reference_only_when_bullish(d_config: dict) -> None:
+    """A NONE only shows a trailing reference when already in a bullish regime."""
+    rec = _none_record(d_config)
+    plan = rec["trading_plan"]
+    if rec["strategy_state"]["strategy_regime"] == "bullish":
+        assert plan["trailing_stop_reference"] is not None
+    else:
+        assert plan["trailing_stop_reference"] is None
+
+
+def test_suggested_lot_falls_back_to_config_equity(d_config: dict) -> None:
+    df = _supertrend_series()
+    k = _first_buy_index(df)
+    closed = bridge.select_closed_candles(df.iloc[: k + 2].reset_index(drop=True))
+    rec = bridge.build_signal_record(d_config, closed, symbol="XAUUSD")  # no MT5 ctx
+    plan = rec["trading_plan"]
+    assert plan["account_equity_source"] == "config_initial_equity"
+    assert plan["account_equity_reference"] == d_config["risk_parameters"]["initial_equity"]
+    assert plan["suggested_lot"] is not None
+
+
+def test_donchian_diagnostics_present(c_config: dict) -> None:
+    closed = bridge.select_closed_candles(_donchian_series())
+    rec = bridge.build_signal_record(
+        c_config, closed, symbol="XAUUSD", market_context=MARKET_CONTEXT
+    )
+    state = rec["strategy_state"]
+    assert state["donchian_high"] is not None
+    assert state["donchian_low"] is not None
+    assert state["supertrend_value"] is None  # Donchian has no SuperTrend line
+    assert rec["strategy_regime"] in {"bullish", "bearish", "neutral", "unknown"}
+    # Donchian uses a fixed stop -> no trailing reference is fabricated.
+    assert rec["trading_plan"]["trailing_stop_reference"] is None
+
+
+def test_enriched_record_serializes_without_execution_tokens(d_config: dict) -> None:
+    """The enriched record/plan must not introduce any order-execution tokens."""
+    import json
+
+    forbidden = (
+        "order_send",
+        "order_modify",
+        "order_close",
+        "position_close",
+        "TRADE_ACTION",
+        "trade_request",
+    )
+    blob = json.dumps(_buy_record(d_config)) + json.dumps(_none_record(d_config))
+    for token in forbidden:
+        assert token not in blob
+
+
+# ---------------------------------------------------------------------------
+# v1.7.2: recent-candle diagnostics (multiple rows, no duplicate signals)
+# ---------------------------------------------------------------------------
+def test_recent_checks_multiple_rows_no_duplicate_signal(
+    d_config: dict, store: SignalStore
+) -> None:
+    df = _supertrend_series()
+    k = _first_buy_index(df)
+    fetched = df.iloc[: k + 2].reset_index(drop=True)
+
+    def fetch_ohlc_fn(symbol: str, timeframe: str, bars: int) -> pd.DataFrame:
+        return fetched
+
+    first = bridge.run_once(
+        d_config, store, symbol="XAUUSD", fetch_ohlc_fn=fetch_ohlc_fn, recent_limit=10
+    )
+    second = bridge.run_once(
+        d_config, store, symbol="XAUUSD", fetch_ohlc_fn=fetch_ohlc_fn, recent_limit=10
+    )
+
+    # One official signal per closed candle, even though diagnostics re-run.
+    assert first is not None and first["signal_type"] == "BUY"
+    assert second is None
+    assert len(store.read_history()) == 1
+
+    checks = store.read_recent_checks()["checks"]
+    assert len(checks) > 1  # diagnostics over several candles
+    assert all(row["execution_enabled"] is False for row in checks)
+    assert checks[0]["signal_time"] >= checks[-1]["signal_time"]  # newest first
+    # Exactly one of the recent rows is a long signal (the latest closed candle).
+    assert sum(1 for row in checks if row["is_long_signal"]) == 1
+
+
+def test_recent_checks_limit_is_capped(d_config: dict) -> None:
+    closed = bridge.select_closed_candles(_supertrend_series())
+    rows = bridge.build_recent_checks(d_config, closed, limit=10_000)
+    assert len(rows) <= bridge.MAX_RECENT_LIMIT
+
+
+def test_csv_history_flattens_enriched_fields(d_config: dict, store: SignalStore) -> None:
+    rec = _buy_record(d_config)
+    key = store.make_key(rec["strategy_id"], rec["symbol"], rec["timeframe"])
+    store.record(key, rec)
+    row = store.read_history()[0]
+    for column in (
+        "strategy_regime",
+        "reference_entry_price",
+        "initial_stop_price",
+        "trailing_stop_reference",
+        "take_profit_price",
+        "suggested_lot",
+    ):
+        assert column in row
+    assert row["signal_type"] == "BUY"
+    assert row["execution_enabled"] == "False"  # CSV stringifies the bool

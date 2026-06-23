@@ -317,12 +317,14 @@ def run_check_once(
     *,
     mt5_loader: Optional[Mt5Loader] = None,
     store: Optional[SignalStore] = None,
+    recent_limit: int = bridge.DEFAULT_RECENT_LIMIT,
 ) -> dict:
     """Run one signal-only check and persist it through the existing store.
 
-    Returns the latest signal record plus a small stdout/stderr-style summary.
-    ``emitted`` is False when the latest closed candle was already processed
-    (one signal per candle). Execution is always disabled.
+    Returns the latest enriched signal record, the recent-candle diagnostics and
+    a small stdout/stderr-style summary. ``emitted`` is False when the latest
+    closed candle was already processed (one signal per candle). Execution is
+    always disabled; the trading plan in the record is a reference, not an order.
     """
     bridge.assert_signal_only()
     bridge.validate_config(config)
@@ -333,6 +335,7 @@ def run_check_once(
     bridge.initialize_mt5(mt5)
     try:
         symbol = bridge.resolve_symbol(mt5, config["symbol"])
+        market_context = bridge.read_market_context(mt5, symbol)
         fetch_ohlc_fn = bridge.make_fetch_ohlc_fn(mt5)
         record = bridge.run_once(
             config,
@@ -341,6 +344,8 @@ def run_check_once(
             fetch_ohlc_fn=fetch_ohlc_fn,
             bars=bars,
             generated_at=datetime.now(timezone.utc),
+            recent_limit=recent_limit,
+            market_context=market_context,
         )
     finally:
         bridge.shutdown_mt5(mt5)
@@ -358,6 +363,7 @@ def run_check_once(
     return {
         "emitted": emitted,
         "signal": store.read_latest(),
+        "recent_checks": store.read_recent_checks(limit=recent_limit).get("checks", []),
         "stdout": stdout,
         "stderr": "",
         "execution_enabled": False,
@@ -365,8 +371,13 @@ def run_check_once(
 
 
 def latest_signal() -> Optional[dict]:
-    """Read the latest emitted signal record (or ``None``)."""
+    """Read the latest emitted (enriched) signal record (or ``None``)."""
     return SignalStore().read_latest()
+
+
+def recent_checks(limit: int = bridge.DEFAULT_RECENT_LIMIT) -> dict:
+    """Read the stored per-candle diagnostics (newest first, empty when absent)."""
+    return SignalStore().read_recent_checks(limit=limit)
 
 
 # ---------------------------------------------------------------------------
@@ -602,14 +613,16 @@ def tail_logs(lines: int = 100) -> dict:
 
 
 def bridge_status(log_excerpt_lines: int = 20) -> dict:
-    """Rich status for the UI: process status + latest signal + log excerpts."""
+    """Rich status for the UI: process status + latest signal + recent checks + logs."""
     status = process_status()
     latest = latest_signal()
+    checks = recent_checks()
     logs = tail_logs(log_excerpt_lines)
     status.update(
         {
             "latest_signal": latest,
             "latest_signal_time": latest.get("signal_time") if latest else None,
+            "recent_checks": checks.get("checks", []),
             "latest_log_excerpt": logs["stdout_tail"],
             "error_excerpt": logs["stderr_tail"] or None,
         }

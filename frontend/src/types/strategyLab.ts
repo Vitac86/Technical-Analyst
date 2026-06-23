@@ -207,6 +207,55 @@ export interface Mt5Readiness {
   execution_enabled: boolean;
 }
 
+/** OHLC + spread snapshot of the latest closed candle (signal-only). */
+export interface MarketSnapshot {
+  close_price: number | null;
+  open_price: number | null;
+  high_price: number | null;
+  low_price: number | null;
+  atr_value: number | null;
+  spread_points: number | null;
+  latest_closed_candle_time: string | null;
+  previous_closed_candle_time: string | null;
+}
+
+/** Strategy regime + indicator state for the latest closed candle. */
+export interface StrategyState {
+  strategy_regime: string; // bullish | bearish | neutral | unknown
+  previous_strategy_regime: string | null;
+  is_new_long_signal: boolean;
+  bars_since_last_long_signal: number | null;
+  supertrend_value: number | null;
+  supertrend_distance_atr: number | null;
+  donchian_high: number | null;
+  donchian_low: number | null;
+  donchian_position: number | null;
+}
+
+/**
+ * Reference trading plan for a signal. Every field is a *reference* for a
+ * signal-only workflow — no order is ever placed, modified or closed.
+ */
+export interface TradingPlan {
+  reference_entry_type: string | null;
+  reference_entry_price: number | null;
+  initial_stop_price: number | null;
+  trailing_stop_reference: number | null;
+  take_profit_price: number | null;
+  risk_per_unit: number | null;
+  risk_percent: number | null;
+  account_equity_reference: number | null;
+  account_equity_source: string | null; // mt5_account_equity | config_initial_equity | unavailable
+  risk_amount: number | null;
+  suggested_lot: number | null;
+  contract_size: number | null;
+  point_value: number | null;
+  lot_step: number | null;
+  reason_human: string;
+  next_condition?: string | null;
+  notes: string;
+}
+
 export interface SignalRecord {
   signal_id: string;
   generated_at: string;
@@ -216,6 +265,7 @@ export interface SignalRecord {
   signal_time: string;
   signal_type: string; // "BUY" | "NONE"
   reason: string;
+  reason_human?: string;
   close_price: number | string | null;
   atr_value: number | string | null;
   suggested_entry_reference: string;
@@ -225,6 +275,45 @@ export interface SignalRecord {
   take_profit_atr: number | string | null;
   status: string;
   execution_enabled: boolean | string;
+  // enriched flat fields (also present as CSV history columns)
+  strategy_regime?: string | null;
+  reference_entry_price?: number | string | null;
+  initial_stop_price?: number | string | null;
+  trailing_stop_reference?: number | string | null;
+  take_profit_price?: number | string | null;
+  suggested_lot?: number | string | null;
+  // enriched nested objects (present on latest_signal.json, not CSV rows)
+  market_snapshot?: MarketSnapshot;
+  strategy_state?: StrategyState;
+  trading_plan?: TradingPlan;
+}
+
+/** One closed-candle diagnostic row (display aid; not an official signal). */
+export interface RecentCheck {
+  signal_time: string;
+  close_price: number | null;
+  atr_value: number | null;
+  strategy_regime: string;
+  is_long_signal: boolean;
+  signal_type: string;
+  reason: string;
+  reason_human: string;
+  supertrend_value: number | null;
+  donchian_high: number | null;
+  donchian_low: number | null;
+  initial_stop_reference: number | null;
+  trailing_stop_reference: number | null;
+  execution_enabled: boolean | string;
+}
+
+export interface RecentChecksResponse {
+  recent_checks: RecentCheck[];
+  count: number;
+  generated_at: string | null;
+  symbol: string | null;
+  timeframe: string | null;
+  strategy_id: string | null;
+  execution_enabled: boolean;
 }
 
 export interface LatestSignalResponse {
@@ -242,6 +331,7 @@ export interface CheckOnceResponse {
   ok: boolean;
   emitted: boolean;
   signal: SignalRecord | null;
+  recent_checks?: RecentCheck[];
   stdout: string;
   stderr: string;
   execution_enabled: boolean;
@@ -262,6 +352,7 @@ export interface BridgeProcessStatus {
   // present on GET /status
   latest_signal?: SignalRecord | null;
   latest_signal_time?: string | null;
+  recent_checks?: RecentCheck[];
   latest_log_excerpt?: string;
   error_excerpt?: string | null;
 }

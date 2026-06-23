@@ -1,14 +1,27 @@
-# Strategy Lab v1.7 / v1.7.1 — MT5 Signal-Only Bridge
+# Strategy Lab v1.7 / v1.7.1 / v1.7.2 — MT5 Signal-Only Bridge
 
 > **Signal-only. Execution is intentionally disabled.**
 > The bridge **never** opens, closes or modifies orders/positions, never logs in
 > to the broker, never stores credentials, and never enables live trading.
-> `execution_enabled` is always `false`.
+> `execution_enabled` is always `false`. Everything in the **trading plan**
+> below — entry, stop, take-profit, suggested lot — is a labelled *reference*,
+> not an order instruction. **No order is ever sent.**
 
 **v1.7.1** adds a UI control panel (and the backend API behind it) so you can
 drive the *same* signal-only bridge from the Strategy Lab page instead of typing
 long CLI commands — save a config, check MT5 readiness, run one check, and
 start/stop polling, all from the browser. The CLI remains as a fallback.
+
+**v1.7.2** enriches the output so the panel is *actionable* without ever
+executing. Each signal now carries a structured **`trading_plan`** (reference
+entry, initial stop, trailing-stop reference, take-profit, risk distance, risk
+amount and a **suggested lot reference** for the configured `risk_percent` and
+account equity), a **`market_snapshot`** (OHLC + spread + candle times) and a
+**`strategy_state`** (regime, SuperTrend/Donchian levels, fresh-signal flag). A
+new **`recent_checks`** feed reports the latest N closed candles so you can see
+*what happened over the last several candles*, not just the latest one — while
+still emitting **exactly one official signal per closed candle**. It remains
+signal-only: there are still no order/execution endpoints anywhere.
 
 The bridge connects to a **locally running** MetaTrader 5 terminal, reads a
 Strategy Lab v1.6 exported strategy config, pulls recent candles, computes the
@@ -49,25 +62,39 @@ panel below the backtest. The flow is top-to-bottom:
    launches a background poller every *poll seconds* (default 60); **Stop polling**
    stops it. While polling is running, **Start** is disabled and **Stop** is
    enabled (and vice-versa).
-4. **Latest signal** / **Signal history** — show the most recent alert and the
-   full log. A prominent **“Signal-only mode. Execution disabled.”** badge is
-   always visible, and `execution_enabled` is shown as `false` on every row.
-5. **Logs** — collapsed by default; **Refresh logs** shows the poller’s
+4. **Latest signal** — three cards: a **Signal status** card with a big
+   **BUY / NO ENTRY** badge, the human-readable reason, the strategy regime and a
+   fresh-signal flag; a **Market snapshot** card (close, ATR, spread, candle
+   times, SuperTrend/Donchian levels); and a **Trading plan (reference only)**
+   card. For a BUY the plan shows the reference entry, initial stop, trailing-stop
+   reference, take-profit (or “none”), risk distance, risk amount, **suggested lot
+   reference** and the account-equity reference; for NO ENTRY it shows *why* there
+   is no entry and the *next condition* required — never a fabricated entry price.
+5. **Recent checks** — a table of the last ~10–20 closed candles (time, close,
+   ATR, regime, BUY/NO ENTRY, reason, SuperTrend/Donchian level, trailing
+   reference, and entry/stop only on BUY rows) so you can see what happened over
+   the last several candles, not only the latest.
+6. **Signal history** — the official one-row-per-closed-candle log (generated_at,
+   signal time, signal, reason, close, reference entry, initial stop, suggested
+   lot, exec). A prominent **“Signal-only mode. Execution disabled.”** badge is
+   always visible and `execution_enabled` is `false` on every row.
+7. **Logs** — collapsed by default; **Refresh logs** shows the poller’s
    stdout/stderr tail.
 
 ### Control API (all under `/api/strategy-lab/signals`, no execution)
 
 | Method & path | Purpose |
 | --- | --- |
-| `GET  /latest` | Most recent emitted signal. |
-| `GET  /history?limit=50` | Recent signals, newest first. |
+| `GET  /latest` | Most recent emitted (enriched) signal. |
+| `GET  /history?limit=50` | Recent signals, newest first (flattened CSV rows). |
+| `GET  /recent-checks?limit=20` | Per-candle diagnostics over the latest closed candles (newest first). *(v1.7.2)* |
 | `POST /configs/save` | Validate + save a config JSON (body: `{config, name?}`). |
 | `GET  /configs` | List saved configs with a summary. |
 | `POST /mt5-check` | MT5 readiness for `{config_path \| config, bars}` — no signal, no trade. |
-| `POST /check-once` | Run one signal-only check; writes via the store. |
+| `POST /check-once` | Run one signal-only check; writes via the store. Returns the enriched signal **and** `recent_checks`. Body also accepts `recent_limit` (default 10, max 100). |
 | `POST /start` | Start polling subprocess (`{config_path, poll_seconds, bars}`). |
 | `POST /stop` | Stop the managed polling subprocess. |
-| `GET  /status` | Running flag, pid, started_at, config, poll_seconds, latest signal, log excerpts. |
+| `GET  /status` | Running flag, pid, started_at, config, poll_seconds, latest signal, **recent checks**, log excerpts. |
 | `GET  /logs?lines=100` | stdout/stderr tail. |
 
 There are **no** order-execution endpoints. Every response includes
@@ -164,6 +191,7 @@ closed candle**. On an unchanged candle it prints
 | `--bars` | `500` | Candles to fetch (last one is treated as forming). |
 | `--once` | off | Run a single check and exit. |
 | `--poll-seconds` | `60` | Polling interval when not `--once`. |
+| `--recent-limit` | `10` | Closed candles of diagnostics to record per check (max 100). *(v1.7.2)* |
 | `--symbol` | config symbol | Override with the broker's exact MT5 symbol. |
 | `--dry-run` / `--no-dry-run` | `true` | Reserved safety flag; v1.7 never executes regardless. |
 | `--output-dir` | `MetaTrader_Data/reports/mt5_signal_bridge/` | Where logs/state are written. |
@@ -175,8 +203,12 @@ which is **git-ignored** — generated logs are never committed):
 
 - `state.json` — last processed `signal_time` + `signal_id` per
   strategy/symbol/timeframe (deduplication).
-- `signals.csv` — append-only log, one row per processed closed candle.
-- `latest_signal.json` — the most recent signal record.
+- `signals.csv` — append-only log, one row per processed closed candle
+  (flattened key + trading-plan columns; see below).
+- `latest_signal.json` — the most recent **enriched** signal record (full
+  `market_snapshot` / `strategy_state` / `trading_plan` objects).
+- `recent_checks.json` — per-candle diagnostics over the latest N closed candles
+  (a display aid; it emits no official signal). *(v1.7.2)*
 - `bridge_process.json` — managed-poller state (pid, started_at, config_path,
   poll_seconds, bars, status). *(v1.7.1)*
 - `bridge_stdout.log` / `bridge_stderr.log` — the polling subprocess output.
@@ -186,12 +218,67 @@ UI-saved configs are written to `MetaTrader_Data/configs/` (also **git-ignored**
 generated configs are never committed). All of `mt5_exports/`, `reports/` and
 `configs/` under `MetaTrader_Data/` are ignored by git.
 
-Each signal record contains: `signal_id`, `generated_at`, `symbol`, `timeframe`,
+### The enriched signal record (v1.7.2)
+
+Top-level identity fields: `signal_id`, `generated_at`, `symbol`, `timeframe`,
 `strategy_id`, `signal_time`, `signal_type` (`BUY`/`NONE`), `reason`,
-`close_price`, `atr_value`, `suggested_entry_reference`
-(`next_bar_open_or_market`), `risk_percent`, `initial_stop_loss_atr`,
-`trailing_stop_atr`, `take_profit_atr`, `status` (`signal_only`), and
-`execution_enabled` (`false`).
+`reason_human`, `strategy_regime`, `status` (`signal_only`) and
+`execution_enabled` (always `false`). The legacy flat fields
+(`close_price`, `atr_value`, `suggested_entry_reference`, `risk_percent`,
+`initial_stop_loss_atr`, `trailing_stop_atr`, `take_profit_atr`) are kept for
+back-compat. The new value is in three nested objects:
+
+**`market_snapshot`** — `close_price`, `open_price`, `high_price`, `low_price`,
+`atr_value`, `spread_points` (when MT5 provides it), `latest_closed_candle_time`,
+`previous_closed_candle_time`.
+
+**`strategy_state`** — `strategy_regime` (`bullish`/`bearish`/`neutral`/
+`unknown`), `previous_strategy_regime`, `is_new_long_signal`,
+`bars_since_last_long_signal`, plus the indicator levels: `supertrend_value` and
+`supertrend_distance_atr` for **D**, or `donchian_high`, `donchian_low` and
+`donchian_position` for **C**.
+
+**`trading_plan`** — a labelled **reference**, never an order:
+
+| Field | Meaning |
+| --- | --- |
+| `reference_entry_type` | Always `next_bar_open_or_market_reference`. |
+| `reference_entry_price` | The **reference** entry. Because the bridge evaluates the *closed* candle, it uses that candle’s close as a conservative reference — the live next-bar open / actual fill is **not guaranteed**. `null` when there is no entry. |
+| `initial_stop_price` | `reference_entry_price − initial_stop_loss_atr × atr_value`. `null` for NONE. |
+| `trailing_stop_reference` | **D only**: `close_price − trailing_stop_atr × atr_value`. For NONE it is only shown when the regime is already bullish (informational); otherwise `null`. C uses a fixed stop, so this is `null`. |
+| `take_profit_price` | `reference_entry_price + take_profit_atr × atr_value`, or `null` when `take_profit_atr` is `null` (D’s default) or there is no entry. |
+| `risk_per_unit` | `reference_entry_price − initial_stop_price` (price distance at risk per unit). |
+| `risk_percent` | The configured risk per trade. |
+| `account_equity_reference` / `account_equity_source` | MT5 `account_info.equity` when available (`mt5_account_equity`); otherwise the config’s `initial_equity` (`config_initial_equity`); otherwise `unavailable`. |
+| `risk_amount` | `account_equity_reference × risk_percent / 100`. |
+| `suggested_lot` | **A sizing reference, not an order:** `risk_amount / (risk_per_unit × contract_size)`, rounded **down** to `lot_step` (MT5 `volume_step`, else `0.01`). `null` (shown as “not available”) when it cannot be computed. |
+| `contract_size` / `point_value` / `lot_step` | From MT5 `symbol_info` when available, else sensible fallbacks (`contract_size = 100` for XAUUSD). |
+| `reason_human` / `next_condition` / `notes` | Plain-English reason, the condition needed for the next BUY (NONE only), and a “signal-only reference; no order is sent” note. |
+
+**Why NONE has no entry price.** A `NONE` is a no-entry candle. The plan
+deliberately leaves `reference_entry_price`, `initial_stop_price`,
+`take_profit_price`, `risk_per_unit`, `risk_amount` and `suggested_lot` as `null`
+so nothing can be mistaken for an order. It still carries `reason_human`
+(*e.g. “No fresh SuperTrend bullish flip on the latest closed candle”*) and
+`next_condition` (*e.g. “A SuperTrend bullish flip — a closed candle whose close
+crosses above the SuperTrend line”*).
+
+`signals.csv` flattens the most useful fields: `signal_id`, `generated_at`,
+`signal_time`, `symbol`, `timeframe`, `strategy_id`, `signal_type`, `reason`,
+`close_price`, `atr_value`, `strategy_regime`, `reference_entry_price`,
+`initial_stop_price`, `trailing_stop_reference`, `take_profit_price`,
+`risk_percent`, `suggested_lot`, `execution_enabled`.
+
+### `recent_checks` vs the official signal history (v1.7.2)
+
+- **`recent_checks.json`** (and `GET /recent-checks`) is a *diagnostics* view: it
+  re-evaluates the **latest N closed candles** every check (default 10, max 100)
+  so you can answer *“what happened over the last several candles?”*. It is
+  recomputed each run and is **not** an emission log — it never creates a signal.
+- **`signals.csv`** (and `GET /history`) is the *official* log: **exactly one row
+  per closed candle**, written once, deduplicated by `signal_time`. Refreshing the
+  recent-checks diagnostics never adds a second official signal for the same
+  candle.
 
 ### Read them via the API (optional)
 
@@ -200,6 +287,7 @@ bridge process is independent and does **not** need to run inside FastAPI):
 
 - `GET /api/strategy-lab/signals/latest`
 - `GET /api/strategy-lab/signals/history?limit=50`
+- `GET /api/strategy-lab/signals/recent-checks?limit=20` *(v1.7.2)*
 
 Point the API at a custom directory with the `MT5_SIGNAL_BRIDGE_DIR` env var (it
 must match the bridge's `--output-dir`).
@@ -217,14 +305,20 @@ backtester uses — and applies the closed-candle rule (it evaluates the
 
 ## 7. How to verify the bridge is signal-only
 
-- `execution_enabled` is `false` in every record, every CSV row, and both API
-  responses.
+- `execution_enabled` is `false` in every record, every CSV row, every
+  recent-check row, and every API response.
 - The module-level lock `EXECUTION_ENABLED = False` and the runtime guard
   `assert_signal_only()` (called before every evaluation) enforce it.
+- The enriched **`trading_plan`** is a labelled *reference* only: a `NONE` never
+  carries an entry/stop/lot, and the `suggested_lot` is sizing guidance, not an
+  order. Tests assert the BUY/NONE plan shape and that no order-execution tokens
+  ever appear in a serialized record.
 - A test (`test_no_order_execution_functions_referenced`) asserts that no
   order/trade-mutating MT5 call (`order_send`, `order_check`, `order_modify`,
   `order_close`, `position_close`, `TRADE_ACTION`, …) appears anywhere in the
   bridge package. There are **no** order-execution API endpoints.
+- The recent-checks diagnostics re-run every check but **never** emit a second
+  official signal for an already-processed candle (one signal per closed candle).
 
 Run the tests (no MT5 terminal required — MT5 is mocked):
 

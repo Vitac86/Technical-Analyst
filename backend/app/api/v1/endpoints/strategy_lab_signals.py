@@ -55,6 +55,25 @@ def get_signal_history(limit: int = Query(default=50, ge=1, le=1000)) -> dict:
     return {"signals": signals, "count": len(signals), "execution_enabled": False}
 
 
+@router.get("/recent-checks")
+def get_recent_checks(limit: int = Query(default=20, ge=1, le=100)) -> dict:
+    """Return per-candle diagnostics over the latest closed candles (newest first).
+
+    These are a display aid only: they emit no official signal and never trade.
+    """
+    payload = _store().read_recent_checks(limit=limit)
+    checks = payload.get("checks", [])
+    return {
+        "recent_checks": checks,
+        "count": len(checks),
+        "generated_at": payload.get("generated_at"),
+        "symbol": payload.get("symbol"),
+        "timeframe": payload.get("timeframe"),
+        "strategy_id": payload.get("strategy_id"),
+        "execution_enabled": False,
+    }
+
+
 # ---------------------------------------------------------------------------
 # A. Save a config for the bridge
 # ---------------------------------------------------------------------------
@@ -101,7 +120,9 @@ def check_once(body: CheckOnceRequest) -> dict:
     except bridge.BridgeError as exc:
         raise _bridge_error(exc) from exc
     try:
-        result = manager.run_check_once(config, bars=body.bars)
+        result = manager.run_check_once(
+            config, bars=body.bars, recent_limit=body.recent_limit
+        )
     except bridge.BridgeError as exc:
         # MT5 operational issue (package/terminal/symbol/rates): actionable, not
         # a malformed request -- surface it inline so the UI can guide the user.
@@ -109,6 +130,9 @@ def check_once(body: CheckOnceRequest) -> dict:
             "ok": False,
             "emitted": False,
             "signal": manager.latest_signal(),
+            "recent_checks": manager.recent_checks(limit=body.recent_limit).get(
+                "checks", []
+            ),
             "stdout": "",
             "stderr": str(exc),
             "execution_enabled": False,

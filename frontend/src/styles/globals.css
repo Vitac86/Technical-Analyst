@@ -2366,6 +2366,71 @@ a {
   font-weight: 700;
 }
 
+/* v1.7.2 enriched signal cards (status / market snapshot / trading plan) */
+.slb-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.slb-card {
+  background: #131820;
+  border: 1px solid #20262f;
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+
+.slb-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.slb-card-title {
+  font-size: 12px;
+  font-weight: 800;
+  color: #6f7b8a;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.slb-card-reason {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #d4dbe4;
+}
+
+.slb-bigbadge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 15px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  border-radius: 8px;
+  padding: 4px 14px;
+}
+
+.slb-bigbadge-buy {
+  color: #0c1410;
+  background: #4fd6a4;
+}
+
+.slb-bigbadge-none {
+  color: #c3ccd8;
+  background: #2a323e;
+}
+
+.slb-plan-note {
+  margin: 12px 0 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: #e0b15a;
+}
+
 .slb-table-wrap {
   overflow-x: auto;
 }

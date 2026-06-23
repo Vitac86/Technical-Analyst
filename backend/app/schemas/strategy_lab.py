@@ -260,7 +260,9 @@ class Mt5CheckRequest(BaseModel):
 
 
 class CheckOnceRequest(Mt5CheckRequest):
-    """Run a single signal-only check (same input shape as the readiness check)."""
+    """Run a single signal-only check (readiness input plus a diagnostics limit)."""
+
+    recent_limit: int = Field(default=10, ge=1, le=100)
 
 
 class StartBridgeRequest(BaseModel):
