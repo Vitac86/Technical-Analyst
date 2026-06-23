@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from app.api.v1.endpoints import strategy_lab
+from app.api.v1.endpoints import strategy_lab, strategy_lab_signals
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.logging import configure_logging
@@ -32,6 +32,12 @@ def create_app() -> FastAPI:
     # Strategy Lab v1.6 lives under its own namespace (rule-based research UI).
     application.include_router(
         strategy_lab.router, prefix="/api/strategy-lab", tags=["strategy-lab"]
+    )
+    # Strategy Lab v1.7 read-only signal-only bridge output (no execution).
+    application.include_router(
+        strategy_lab_signals.router,
+        prefix="/api/strategy-lab/signals",
+        tags=["strategy-lab-signals"],
     )
     return application
 
