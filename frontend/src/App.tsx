@@ -5,6 +5,7 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { InstrumentPage } from "./pages/InstrumentPage";
 import { MobileChartPage } from "./pages/MobileChartPage";
 import { ScannerPage } from "./pages/ScannerPage";
+import { StrategyLabPage } from "./pages/StrategyLabPage";
 
 // Detect Capacitor (Android/iOS) at module load time.
 // When running in a Capacitor WebView, window.Capacitor is defined.
@@ -51,6 +52,14 @@ export default function App() {
         element={
           <AppLayout>
             <ScannerPage />
+          </AppLayout>
+        }
+      />
+      <Route
+        path="/strategy-lab"
+        element={
+          <AppLayout>
+            <StrategyLabPage />
           </AppLayout>
         }
       />

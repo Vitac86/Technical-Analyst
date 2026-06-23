@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from app.api.v1.endpoints import strategy_lab
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.logging import configure_logging
@@ -28,6 +29,10 @@ def create_app() -> FastAPI:
     allow_headers=["*"],
     )
     application.include_router(api_router, prefix=settings.api_v1_prefix)
+    # Strategy Lab v1.6 lives under its own namespace (rule-based research UI).
+    application.include_router(
+        strategy_lab.router, prefix="/api/strategy-lab", tags=["strategy-lab"]
+    )
     return application
 
 

@@ -17,6 +17,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           <NavLink to="/">Dashboard</NavLink>
           <NavLink to="/chart">Chart</NavLink>
           <NavLink to="/scanner">Scanner</NavLink>
+          <NavLink to="/strategy-lab">Strategy Lab</NavLink>
         </nav>
       </header>
       <main className="app-main">{children}</main>

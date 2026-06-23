@@ -1767,3 +1767,406 @@ a {
     width: 110px;
   }
 }
+
+/* ===========================================================================
+   Strategy Lab (v1.6 rule-based research UI)
+   =========================================================================== */
+.sl-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sl-disclaimer {
+  border: 1px solid #4a3a1f;
+  background: #211b10;
+  color: #e3c98a;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.sl-ml-note {
+  border: 1px solid #243245;
+  background: #141b24;
+  color: #a9c7e6;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* --- Preset selector --- */
+.sl-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.sl-preset-card {
+  text-align: left;
+  border: 1px solid #2a3038;
+  background: #171b22;
+  border-radius: 8px;
+  padding: 14px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.sl-preset-card:hover {
+  border-color: #3a4452;
+}
+
+.sl-preset-card-active {
+  border-color: #2f7d6d;
+  background: #14211e;
+}
+
+.sl-preset-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sl-preset-name {
+  font-weight: 800;
+  font-size: 14px;
+}
+
+.sl-preset-tf {
+  color: #a9d8ff;
+  font-weight: 800;
+  font-size: 12px;
+  background: #18242f;
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+
+.sl-preset-desc {
+  color: #97a3b3;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 8px 0 10px;
+}
+
+.sl-preset-tags,
+.sl-tag {
+  display: inline-flex;
+}
+
+.sl-preset-tags {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sl-tag {
+  font-size: 11px;
+  color: #b9c4d2;
+  background: #1e2530;
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+
+.sl-tag-default {
+  color: #8fe0c4;
+  background: #16261f;
+}
+
+.sl-tag-status {
+  color: #8fe0c4;
+  background: #16261f;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 700;
+}
+
+/* --- Guidance --- */
+.sl-guidance {
+  border: 1px solid #2a3038;
+  background: #14181e;
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.sl-guidance-use {
+  margin: 0 0 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #d4dbe4;
+}
+
+.sl-warnings {
+  margin: 0;
+  padding-left: 18px;
+  color: #97a3b3;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* --- Controls --- */
+.sl-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.sl-param-panel,
+.sl-controls-side {
+  border: 1px solid #2a3038;
+  background: #171b22;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.sl-controls-side {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.sl-param-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.sl-link-btn {
+  background: none;
+  border: none;
+  color: #a9d8ff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0;
+}
+
+.sl-link-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sl-param-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.sl-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sl-field-label {
+  font-size: 12px;
+  color: #97a3b3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sl-input {
+  background: #0f1318;
+  border: 1px solid #2a3038;
+  border-radius: 6px;
+  color: #e7ecf2;
+  padding: 8px 10px;
+  width: 100%;
+}
+
+.sl-input:focus {
+  outline: none;
+  border-color: #2f7d6d;
+}
+
+.sl-input:disabled {
+  opacity: 0.6;
+}
+
+.sl-field-hint {
+  font-size: 10px;
+  color: #5f6c7c;
+}
+
+.sl-tp-toggle {
+  width: auto;
+  margin: 0;
+}
+
+/* --- Cost scenario + dates --- */
+.sl-cost-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sl-cost-custom {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.sl-cost-hint {
+  margin: 0;
+  font-size: 11px;
+  color: #6f7d8d;
+  line-height: 1.5;
+}
+
+.sl-date-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.sl-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* --- Results --- */
+.sl-results {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sl-results-meta {
+  color: #97a3b3;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* --- Metric cards --- */
+.sl-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.sl-metric-card {
+  border: 1px solid #2a3038;
+  background: #171b22;
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sl-metric-label {
+  font-size: 11px;
+  color: #97a3b3;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.sl-metric-value {
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.sl-pos {
+  color: #31b181;
+}
+
+.sl-neg {
+  color: #eb5757;
+}
+
+/* --- Charts --- */
+.sl-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 14px;
+}
+
+.sl-chart-canvas {
+  width: 100%;
+}
+
+/* --- Period + trades tables --- */
+.sl-period-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+}
+
+.sl-period-block {
+  border: 1px solid #2a3038;
+  background: #171b22;
+  border-radius: 8px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sl-table-scroll {
+  overflow-x: auto;
+}
+
+.sl-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.sl-table th {
+  padding: 8px 10px;
+  text-align: left;
+  color: #97a3b3;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  border-bottom: 1px solid #2a3038;
+}
+
+.sl-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid #1e2530;
+  white-space: nowrap;
+}
+
+.sl-table tbody tr:hover td {
+  background: #1d2330;
+}
+
+.sl-trades-meta {
+  font-size: 12px;
+  color: #97a3b3;
+  margin-bottom: 8px;
+}
+
+.sl-dir {
+  font-weight: 700;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.sl-dir-long {
+  color: #31b181;
+}
+
+.sl-dir-short {
+  color: #eb5757;
+}
+
+.sl-reason {
+  color: #97a3b3;
+  font-size: 12px;
+}
+
+@media (max-width: 860px) {
+  .sl-controls {
+    grid-template-columns: 1fr;
+  }
+}
