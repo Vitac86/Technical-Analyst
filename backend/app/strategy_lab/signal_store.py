@@ -10,7 +10,8 @@ Files written:
       processed ``signal_time`` and last emitted ``signal_id`` (one-signal-per-
       candle deduplication).
     * ``signals.csv``        -- append-only log of emitted signals, one row per
-      processed closed candle (flattened :data:`SIGNAL_CSV_FIELDS` columns).
+      processed closed candle (flattened :data:`SIGNAL_CSV_FIELDS` columns,
+      including the human reason and buy-zone distance diagnostics).
     * ``latest_signal.json`` -- the most recently emitted *enriched* signal record
       (full ``market_snapshot`` / ``strategy_state`` / ``trading_plan`` objects).
     * ``recent_checks.json`` -- per-candle diagnostics over the latest N closed
@@ -124,6 +125,7 @@ class SignalStore:
         self._save_state(state)
 
     def _append_signal_row(self, signal: dict) -> None:
+        """Append the flattened signal, including v1.7.3 buy-zone diagnostics."""
         row = flatten_signal_for_csv(signal)
         write_header = not self.signals_path.exists()
         with self.signals_path.open("a", newline="", encoding="utf-8") as handle:

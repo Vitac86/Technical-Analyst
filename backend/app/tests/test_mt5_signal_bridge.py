@@ -429,6 +429,17 @@ def _none_record(d_config: dict) -> dict:
     )
 
 
+def _bullish_none_record(d_config: dict) -> dict:
+    df = _supertrend_series()
+    k = _first_buy_index(df)
+    # The BUY occurs at k. Evaluate the following fully closed bullish candle,
+    # which must not repeat the entry.
+    closed = bridge.select_closed_candles(df.iloc[: k + 3].reset_index(drop=True))
+    return bridge.build_signal_record(
+        d_config, closed, symbol="XAUUSD", market_context=MARKET_CONTEXT
+    )
+
+
 def test_enriched_buy_has_trading_plan(d_config: dict) -> None:
     rec = _buy_record(d_config)
     assert rec["execution_enabled"] is False
@@ -456,6 +467,11 @@ def test_enriched_buy_has_trading_plan(d_config: dict) -> None:
     assert state["is_new_long_signal"] is True
     assert state["bars_since_last_long_signal"] == 0
     assert state["supertrend_value"] is not None
+    assert rec["reason_human"] == (
+        "BUY: latest closed H4 candle produced a fresh bullish SuperTrend flip."
+    )
+    assert "fresh bullish SuperTrend flip" in rec["next_buy_condition"]
+    assert state["next_buy_condition"] == rec["next_buy_condition"]
 
 
 def test_enriched_none_has_plan_without_fake_entry(d_config: dict) -> None:
@@ -476,6 +492,36 @@ def test_enriched_none_has_plan_without_fake_entry(d_config: dict) -> None:
     # ... but it still explains why and what the next BUY needs.
     assert plan["reason_human"]
     assert plan["next_condition"]
+
+
+def test_d_bearish_none_has_buy_zone_distance(d_config: dict) -> None:
+    rec = _none_record(d_config)
+    state = rec["strategy_state"]
+
+    assert rec["signal_type"] == "NONE"
+    assert state["strategy_regime"] == "bearish"
+    assert state["buy_zone_level"] == state["supertrend_value"]
+    assert state["buy_zone_relation"] == "below_buy_zone"
+    assert state["distance_to_buy_zone_price"] > 0
+    assert state["distance_to_buy_zone_atr"] > 0
+    assert state["distance_to_buy_zone_pct"] > 0
+    assert rec["reason_human"] == (
+        "No entry: SuperTrend regime is bearish on the latest closed H4 candle. "
+        "The strategy waits for a fresh bullish flip."
+    )
+
+
+def test_d_bullish_none_explains_no_repeated_entry(d_config: dict) -> None:
+    rec = _bullish_none_record(d_config)
+
+    assert rec["signal_type"] == "NONE"
+    assert rec["strategy_state"]["strategy_regime"] == "bullish"
+    assert rec["reason_human"] == (
+        "No entry: SuperTrend regime is already bullish, but there is no fresh "
+        "flip on the latest closed H4 candle. The strategy does not repeat entries."
+    )
+    assert rec["strategy_state"]["buy_zone_relation"] == "above_buy_zone"
+    assert rec["strategy_state"]["distance_to_buy_zone_price"] == 0
 
 
 def test_none_trailing_reference_only_when_bullish(d_config: dict) -> None:
@@ -508,6 +554,9 @@ def test_donchian_diagnostics_present(c_config: dict) -> None:
     assert state["donchian_high"] is not None
     assert state["donchian_low"] is not None
     assert state["supertrend_value"] is None  # Donchian has no SuperTrend line
+    assert state["buy_zone_level"] == state["donchian_high"]
+    assert state["buy_zone_relation"] in {"below_buy_zone", "above_buy_zone"}
+    assert state["next_buy_condition"] == bridge.DONCHIAN_NEXT_BUY_CONDITION
     assert rec["strategy_regime"] in {"bullish", "bearish", "neutral", "unknown"}
     # Donchian uses a fixed stop -> no trailing reference is fabricated.
     assert rec["trading_plan"]["trailing_stop_reference"] is None
@@ -559,6 +608,11 @@ def test_recent_checks_multiple_rows_no_duplicate_signal(
     assert len(checks) > 1  # diagnostics over several candles
     assert all(row["execution_enabled"] is False for row in checks)
     assert checks[0]["signal_time"] >= checks[-1]["signal_time"]  # newest first
+    assert all("reason_human" in row for row in checks)
+    assert all("buy_zone_level" in row for row in checks)
+    assert all("distance_to_buy_zone_price" in row for row in checks)
+    assert all("distance_to_buy_zone_atr" in row for row in checks)
+    assert all("buy_zone_relation" in row for row in checks)
     # Exactly one of the recent rows is a long signal (the latest closed candle).
     assert sum(1 for row in checks if row["is_long_signal"]) == 1
 
@@ -575,7 +629,13 @@ def test_csv_history_flattens_enriched_fields(d_config: dict, store: SignalStore
     store.record(key, rec)
     row = store.read_history()[0]
     for column in (
+        "reason_human",
         "strategy_regime",
+        "buy_zone_level",
+        "distance_to_buy_zone_price",
+        "distance_to_buy_zone_atr",
+        "distance_to_buy_zone_pct",
+        "buy_zone_relation",
         "reference_entry_price",
         "initial_stop_price",
         "trailing_stop_reference",

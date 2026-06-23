@@ -1,4 +1,4 @@
-# Strategy Lab v1.7 / v1.7.1 / v1.7.2 — MT5 Signal-Only Bridge
+# Strategy Lab v1.7.x — MT5 Signal-Only Bridge
 
 > **Signal-only. Execution is intentionally disabled.**
 > The bridge **never** opens, closes or modifies orders/positions, never logs in
@@ -23,6 +23,13 @@ new **`recent_checks`** feed reports the latest N closed candles so you can see
 still emitting **exactly one official signal per closed candle**. It remains
 signal-only: there are still no order/execution endpoints anywhere.
 
+**v1.7.3** adds explicit **Next BUY condition** and **Distance to BUY zone**
+diagnostics. For D, the current SuperTrend value is exposed as a reference
+boundary while the regime is bearish or neutral, together with price, ATR and
+percentage distance. For C, the equivalent reference is the Donchian breakout
+high. These values explain the latest closed candle; they do not predict or
+guarantee the next trigger.
+
 The bridge connects to a **locally running** MetaTrader 5 terminal, reads a
 Strategy Lab v1.6 exported strategy config, pulls recent candles, computes the
 **exact same** rule-based signal as the backtester (by reusing
@@ -31,7 +38,8 @@ alerts/logs. It is a research/monitoring tool, not a trading robot.
 
 The primary production candidate is finalist **D**: H4 long-only SuperTrend with
 an ATR trailing stop and risk-percent sizing. Finalist **C** (H1 Donchian
-breakout) is also supported.
+breakout) is also supported. The entire v1.7.x bridge is **long-only**: it emits
+`BUY` or `NONE` and does not emit a SELL/SHORT signal.
 
 ## Files
 
@@ -43,7 +51,7 @@ breakout) is also supported.
 | [mt5_bridge_manager.py](mt5_bridge_manager.py) | v1.7.1 control layer: save/list configs, MT5 readiness, run-once, start/stop polling subprocess, tail logs. Reuses the bridge core — no duplicated logic. |
 | [../api/v1/endpoints/strategy_lab_signals.py](../api/v1/endpoints/strategy_lab_signals.py) | Read-only `/latest` + `/history` **and** the v1.7.1 control endpoints. |
 
-## Using the bridge from the UI (v1.7.1)
+## Using the bridge from the UI (v1.7.3)
 
 Open **Strategy Lab** in the web app and scroll to the **MT5 Signal Bridge**
 panel below the backtest. The flow is top-to-bottom:
@@ -65,15 +73,17 @@ panel below the backtest. The flow is top-to-bottom:
 4. **Latest signal** — three cards: a **Signal status** card with a big
    **BUY / NO ENTRY** badge, the human-readable reason, the strategy regime and a
    fresh-signal flag; a **Market snapshot** card (close, ATR, spread, candle
-   times, SuperTrend/Donchian levels); and a **Trading plan (reference only)**
-   card. For a BUY the plan shows the reference entry, initial stop, trailing-stop
-   reference, take-profit (or “none”), risk distance, risk amount, **suggested lot
-   reference** and the account-equity reference; for NO ENTRY it shows *why* there
-   is no entry and the *next condition* required — never a fabricated entry price.
+   times, the SuperTrend reference boundary or Donchian breakout level, distance
+   in price/ATR/percent, and the above/below/at relation); and a **Trading plan
+   (reference only)** card. For a BUY the plan shows the human reason, reference
+   entry, initial stop, trailing-stop reference, take-profit (or “none”), risk
+   distance, risk amount, **suggested lot reference** and account-equity
+   reference. For NO ENTRY it shows a dedicated **Next BUY condition** block,
+   the human reason and current distance — never a fabricated entry price.
 5. **Recent checks** — a table of the last ~10–20 closed candles (time, close,
-   ATR, regime, BUY/NO ENTRY, reason, SuperTrend/Donchian level, trailing
-   reference, and entry/stop only on BUY rows) so you can see what happened over
-   the last several candles, not only the latest.
+   ATR, regime, BUY/NO ENTRY, buy-zone level, compact price/ATR distance,
+   relation and human-readable reason) so you can see what happened over the
+   last several candles, not only the latest.
 6. **Signal history** — the official one-row-per-closed-candle log (generated_at,
    signal time, signal, reason, close, reference entry, initial stop, suggested
    lot, exec). A prominent **“Signal-only mode. Execution disabled.”** badge is
@@ -218,7 +228,7 @@ UI-saved configs are written to `MetaTrader_Data/configs/` (also **git-ignored**
 generated configs are never committed). All of `mt5_exports/`, `reports/` and
 `configs/` under `MetaTrader_Data/` are ignored by git.
 
-### The enriched signal record (v1.7.2)
+### The enriched signal record (v1.7.3)
 
 Top-level identity fields: `signal_id`, `generated_at`, `symbol`, `timeframe`,
 `strategy_id`, `signal_time`, `signal_type` (`BUY`/`NONE`), `reason`,
@@ -236,7 +246,23 @@ back-compat. The new value is in three nested objects:
 `unknown`), `previous_strategy_regime`, `is_new_long_signal`,
 `bars_since_last_long_signal`, plus the indicator levels: `supertrend_value` and
 `supertrend_distance_atr` for **D**, or `donchian_high`, `donchian_low` and
-`donchian_position` for **C**.
+`donchian_position` for **C**. It also includes:
+
+- `next_buy_condition` — the closed-candle rule required for the next fresh BUY.
+- `buy_zone_level` — D's current SuperTrend reference boundary while bearish or
+  neutral, or C's Donchian breakout high.
+- `distance_to_buy_zone_price` — non-negative price distance to that reference.
+- `distance_to_buy_zone_atr` — the same distance divided by the current ATR.
+- `distance_to_buy_zone_pct` — the same distance as a percentage of close.
+- `buy_zone_relation` — `below_buy_zone`, `above_buy_zone`, `at_buy_zone`, or
+  `unknown`.
+
+For **D**, the SuperTrend boundary comes from the latest fully closed H4 candle.
+It is a **current reference boundary**, not a guaranteed trigger price:
+SuperTrend can move when future candles close. A BUY requires a fresh bullish
+flip; an already-bullish regime does not repeat the entry. For **C**, a BUY
+requires a fully closed H1 candle to break above the Donchian high used by the
+strategy.
 
 **`trading_plan`** — a labelled **reference**, never an order:
 
@@ -253,23 +279,36 @@ back-compat. The new value is in three nested objects:
 | `risk_amount` | `account_equity_reference × risk_percent / 100`. |
 | `suggested_lot` | **A sizing reference, not an order:** `risk_amount / (risk_per_unit × contract_size)`, rounded **down** to `lot_step` (MT5 `volume_step`, else `0.01`). `null` (shown as “not available”) when it cannot be computed. |
 | `contract_size` / `point_value` / `lot_step` | From MT5 `symbol_info` when available, else sensible fallbacks (`contract_size = 100` for XAUUSD). |
-| `reason_human` / `next_condition` / `notes` | Plain-English reason, the condition needed for the next BUY (NONE only), and a “signal-only reference; no order is sent” note. |
+| `reason_human` / `next_buy_condition` / `next_condition` / `notes` | Plain-English reason, the condition needed for the next BUY (`next_condition` is retained for NONE compatibility), and a “signal-only reference; no order is sent” note. |
 
 **Why NONE has no entry price.** A `NONE` is a no-entry candle. The plan
 deliberately leaves `reference_entry_price`, `initial_stop_price`,
 `take_profit_price`, `risk_per_unit`, `risk_amount` and `suggested_lot` as `null`
 so nothing can be mistaken for an order. It still carries `reason_human`
-(*e.g. “No fresh SuperTrend bullish flip on the latest closed candle”*) and
-`next_condition` (*e.g. “A SuperTrend bullish flip — a closed candle whose close
-crosses above the SuperTrend line”*).
+(*e.g. “No entry: SuperTrend regime is bearish on the latest closed H4 candle.
+The strategy waits for a fresh bullish flip.”*) and `next_buy_condition`, which
+explains that a fresh bullish flip on a fully closed H4 candle is required. The
+current SuperTrend value is only a movable reference boundary.
 
 `signals.csv` flattens the most useful fields: `signal_id`, `generated_at`,
 `signal_time`, `symbol`, `timeframe`, `strategy_id`, `signal_type`, `reason`,
-`close_price`, `atr_value`, `strategy_regime`, `reference_entry_price`,
+`reason_human`, `close_price`, `atr_value`, `strategy_regime`,
+`buy_zone_level`, `distance_to_buy_zone_price`, `distance_to_buy_zone_atr`,
+`distance_to_buy_zone_pct`, `buy_zone_relation`, `reference_entry_price`,
 `initial_stop_price`, `trailing_stop_reference`, `take_profit_price`,
 `risk_percent`, `suggested_lot`, `execution_enabled`.
 
-### `recent_checks` vs the official signal history (v1.7.2)
+### BUY vs NO ENTRY
+
+- `BUY` means the latest fully closed strategy candle created a **fresh** long
+  entry event: a bullish SuperTrend flip for D or a Donchian high breakout for C.
+- `NONE` / **NO ENTRY** means there is no fresh long entry on that candle. For D,
+  this can mean the regime is bearish and waiting for a flip, or that it is
+  already bullish and the strategy refuses to repeat the same setup.
+- v1.7.x is long-only. Bearish conditions can explain why there is no long
+  entry, but they do not create a SELL or SHORT signal.
+
+### `recent_checks` vs the official signal history (v1.7.3)
 
 - **`recent_checks.json`** (and `GET /recent-checks`) is a *diagnostics* view: it
   re-evaluates the **latest N closed candles** every check (default 10, max 100)

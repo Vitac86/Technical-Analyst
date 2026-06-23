@@ -94,12 +94,23 @@ DEFAULT_BARS: int = 500
 SUGGESTED_ENTRY_REFERENCE: str = "next_bar_open_or_market"
 SIGNAL_STATUS: str = "signal_only"
 
-# v1.7.2 enriched trading plan: a *reference* entry, never an order instruction.
+# v1.7.2+ enriched trading plan: a *reference* entry, never an order instruction.
 REFERENCE_ENTRY_TYPE: str = "next_bar_open_or_market_reference"
 
 # Recent-candle diagnostics (signal-only): how many closed candles to report.
 DEFAULT_RECENT_LIMIT: int = 10
 MAX_RECENT_LIMIT: int = 100
+
+SUPER_TREND_NEXT_BUY_CONDITION: str = (
+    "A BUY signal appears only after a fresh bullish SuperTrend flip on a fully "
+    "closed H4 candle. Price must close above the current SuperTrend reference "
+    "boundary and the signal must be new, not a repeated bullish state. The "
+    "current reference boundary can move as new candles form."
+)
+DONCHIAN_NEXT_BUY_CONDITION: str = (
+    "A BUY signal appears when a fully closed H1 candle breaks above the "
+    "Donchian high used by the strategy."
+)
 
 # Fallbacks used only when MT5 symbol/account specs are unavailable (e.g. tests
 # or an offline check). In live use these come from MT5 symbol_info/account_info.
@@ -140,9 +151,15 @@ SIGNAL_CSV_FIELDS: tuple[str, ...] = (
     "strategy_id",
     "signal_type",
     "reason",
+    "reason_human",
     "close_price",
     "atr_value",
     "strategy_regime",
+    "buy_zone_level",
+    "distance_to_buy_zone_price",
+    "distance_to_buy_zone_atr",
+    "distance_to_buy_zone_pct",
+    "buy_zone_relation",
     "reference_entry_price",
     "initial_stop_price",
     "trailing_stop_reference",
@@ -365,34 +382,107 @@ def _classify_signal(sig: int, raw_reason: str) -> tuple[str, str]:
     return "NONE", raw_reason or "no_entry"
 
 
-def humanize_reason(reason: str, signal_type: str, family: str) -> str:
+def humanize_reason(
+    reason: str, signal_type: str, family: str, regime: str = "unknown"
+) -> str:
     """A plain-English explanation of a signal/no-signal for the UI."""
     if signal_type == "BUY":
         if family == "supertrend":
-            return "SuperTrend flipped bullish on the latest closed candle — fresh long entry signal."
+            return "BUY: latest closed H4 candle produced a fresh bullish SuperTrend flip."
         if family == "donchian":
-            return "Price closed above the Donchian channel high — fresh long breakout signal."
+            return "BUY: latest closed H1 candle broke above the Donchian breakout level."
         return "Fresh long entry signal on the latest closed candle."
-    if "ignored_long_only" in reason:
-        if family == "supertrend":
-            return "SuperTrend flipped bearish (long-only: no short taken, so no entry)."
-        if family == "donchian":
-            return "Price broke below the Donchian channel low (long-only: no short taken, so no entry)."
-        return "Bearish signal ignored (long-only: no entry)."
     if family == "supertrend":
-        return "No fresh SuperTrend bullish flip on the latest closed candle — no new entry."
+        if regime == "bearish":
+            return (
+                "No entry: SuperTrend regime is bearish on the latest closed H4 "
+                "candle. The strategy waits for a fresh bullish flip."
+            )
+        if regime == "bullish":
+            return (
+                "No entry: SuperTrend regime is already bullish, but there is no "
+                "fresh flip on the latest closed H4 candle. The strategy does not "
+                "repeat entries."
+            )
+        return (
+            "No entry: latest closed H4 candle did not produce a fresh bullish "
+            "SuperTrend flip."
+        )
     if family == "donchian":
-        return "No Donchian breakout above the channel high on the latest closed candle — no new entry."
+        return (
+            "No entry: latest closed H1 candle did not break the Donchian "
+            "breakout level."
+        )
+    if "ignored_long_only" in reason:
+        return "Bearish signal ignored (long-only: no entry)."
     return "No new entry on the latest closed candle."
 
 
 def next_long_condition(family: str) -> str:
     """The human-readable condition needed for the next BUY signal."""
     if family == "supertrend":
-        return "A SuperTrend bullish flip — a closed candle whose close crosses above the SuperTrend line."
+        return SUPER_TREND_NEXT_BUY_CONDITION
     if family == "donchian":
-        return "A close above the Donchian channel high (the rolling breakout level) on a closed candle."
+        return DONCHIAN_NEXT_BUY_CONDITION
     return "A fresh long entry condition on a closed candle."
+
+
+def build_buy_zone_diagnostics(
+    *,
+    family: str,
+    regime: str,
+    close_price: Optional[float],
+    atr_value: Optional[float],
+    supertrend_value: Optional[float] = None,
+    donchian_high: Optional[float] = None,
+) -> dict:
+    """Describe the latest closed candle's distance to the next BUY reference.
+
+    The values are diagnostics only. In particular, a SuperTrend line is the
+    current reference boundary, not a guaranteed future trigger price.
+    """
+    level = supertrend_value if family == "supertrend" else donchian_high
+    if close_price is None or level is None:
+        relation = "unknown"
+        distance = None
+    elif family == "supertrend":
+        if math.isclose(close_price, level, rel_tol=1e-9, abs_tol=1e-9):
+            relation = "at_buy_zone"
+        elif close_price < level:
+            relation = "below_buy_zone"
+        else:
+            relation = "above_buy_zone"
+        distance = max(level - close_price, 0.0)
+    elif family == "donchian":
+        relation = "above_buy_zone" if close_price >= level else "below_buy_zone"
+        distance = max(level - close_price, 0.0)
+    else:
+        relation = "unknown"
+        distance = None
+
+    distance_atr = (
+        _clean_float(distance / atr_value)
+        if distance is not None and atr_value is not None and atr_value > 0
+        else None
+    )
+    distance_pct = (
+        _clean_float(distance / close_price * 100.0)
+        if distance is not None and close_price not in (None, 0)
+        else None
+    )
+    buy_zone_level = (
+        level
+        if family != "supertrend" or regime in {"bearish", "neutral"}
+        else None
+    )
+    return {
+        "next_buy_condition": next_long_condition(family),
+        "buy_zone_level": _clean_float(buy_zone_level),
+        "distance_to_buy_zone_price": _clean_float(distance),
+        "distance_to_buy_zone_atr": distance_atr,
+        "distance_to_buy_zone_pct": distance_pct,
+        "buy_zone_relation": relation,
+    }
 
 
 def empty_market_context() -> dict:
@@ -634,7 +724,8 @@ def build_trading_plan(
         "contract_size": _clean_float(contract),
         "point_value": _clean_float(point_value),
         "lot_step": _clean_float(step),
-        "reason_human": humanize_reason(reason, signal_type, family),
+        "reason_human": humanize_reason(reason, signal_type, family, regime),
+        "next_buy_condition": next_long_condition(family),
         "notes": _NONE_NOTE,
     }
 
@@ -642,7 +733,7 @@ def build_trading_plan(
         # Only surface a trailing reference when already in a bullish regime; never
         # invent an entry price when there is no entry.
         plan["trailing_stop_reference"] = trailing_reference if regime == "bullish" else None
-        plan["next_condition"] = next_long_condition(family)
+        plan["next_condition"] = plan["next_buy_condition"]
         return plan
 
     entry = close_price
@@ -698,7 +789,7 @@ def build_signal_record(
     generated_at: Optional[datetime] = None,
     market_context: Optional[dict] = None,
 ) -> dict:
-    """Compute the enriched v1.7.2 signal record for the latest closed candle.
+    """Compute the enriched v1.7.3 signal record for the latest closed candle.
 
     ``closed_df`` must already exclude the forming candle
     (see :func:`select_closed_candles`). Signal generation is delegated to
@@ -740,6 +831,20 @@ def _record_from_diagnostics(
     close_price = _clean_float(last["close"])
     atr_value = _clean_float(last["atr"])
     regime = str(last["regime"]) if "regime" in diag.columns else "unknown"
+    supertrend_value = (
+        _clean_float(last["supertrend"]) if "supertrend" in diag.columns else None
+    )
+    donchian_high = (
+        _clean_float(last["donchian_high"]) if "donchian_high" in diag.columns else None
+    )
+    buy_zone = build_buy_zone_diagnostics(
+        family=family,
+        regime=regime,
+        close_price=close_price,
+        atr_value=atr_value,
+        supertrend_value=supertrend_value,
+        donchian_high=donchian_high,
+    )
 
     # C uses stop_loss_atr; D uses initial_stop_loss_atr + trailing_stop_atr.
     initial_stop_loss_atr = _clean_float(
@@ -761,17 +866,18 @@ def _record_from_diagnostics(
         "previous_strategy_regime": previous_regime,
         "is_new_long_signal": signal_type == "BUY",
         "bars_since_last_long_signal": _bars_since_last_long(diag),
-        "supertrend_value": _clean_float(last["supertrend"]) if "supertrend" in diag.columns else None,
+        "supertrend_value": supertrend_value,
         "supertrend_distance_atr": (
             _clean_float(last["supertrend_distance_atr"])
             if "supertrend_distance_atr" in diag.columns
             else None
         ),
-        "donchian_high": _clean_float(last["donchian_high"]) if "donchian_high" in diag.columns else None,
+        "donchian_high": donchian_high,
         "donchian_low": _clean_float(last["donchian_low"]) if "donchian_low" in diag.columns else None,
         "donchian_position": (
             _clean_float(last["donchian_position"]) if "donchian_position" in diag.columns else None
         ),
+        **buy_zone,
     }
 
     market_snapshot = {
@@ -833,7 +939,14 @@ def _record_from_diagnostics(
         "trailing_stop_atr": trailing_stop_atr,
         "take_profit_atr": take_profit_atr,
         "strategy_regime": regime,
-        # enriched nested objects (v1.7.2)
+        # v1.7.3 flat diagnostics (also used by CSV history consumers)
+        "next_buy_condition": buy_zone["next_buy_condition"],
+        "buy_zone_level": buy_zone["buy_zone_level"],
+        "distance_to_buy_zone_price": buy_zone["distance_to_buy_zone_price"],
+        "distance_to_buy_zone_atr": buy_zone["distance_to_buy_zone_atr"],
+        "distance_to_buy_zone_pct": buy_zone["distance_to_buy_zone_pct"],
+        "buy_zone_relation": buy_zone["buy_zone_relation"],
+        # enriched nested objects
         "market_snapshot": market_snapshot,
         "strategy_state": strategy_state,
         "trading_plan": trading_plan,
@@ -854,7 +967,6 @@ def build_recent_checks(
     signal, so the two can never disagree.
     """
     limit = max(1, min(int(limit), MAX_RECENT_LIMIT))
-    context = market_context or empty_market_context()
     preset = presets.get_preset(config["strategy_id"])
     family = preset.family
     exit_params = dict(config.get("exit_parameters", {}))
@@ -874,6 +986,20 @@ def build_recent_checks(
         close_price = _clean_float(row["close"])
         atr_value = _clean_float(row["atr"])
         regime = str(row["regime"]) if "regime" in diag.columns else "unknown"
+        supertrend_value = (
+            _clean_float(row["supertrend"]) if "supertrend" in diag.columns else None
+        )
+        donchian_high = (
+            _clean_float(row["donchian_high"]) if "donchian_high" in diag.columns else None
+        )
+        buy_zone = build_buy_zone_diagnostics(
+            family=family,
+            regime=regime,
+            close_price=close_price,
+            atr_value=atr_value,
+            supertrend_value=supertrend_value,
+            donchian_high=donchian_high,
+        )
 
         trailing_reference = (
             _clean_float(close_price - trailing_stop_atr * atr_value)
@@ -900,10 +1026,13 @@ def build_recent_checks(
                 "is_long_signal": signal_type == "BUY",
                 "signal_type": signal_type,
                 "reason": reason,
-                "reason_human": humanize_reason(reason, signal_type, family),
-                "supertrend_value": _clean_float(row["supertrend"]) if "supertrend" in diag.columns else None,
-                "donchian_high": _clean_float(row["donchian_high"]) if "donchian_high" in diag.columns else None,
+                "reason_human": humanize_reason(
+                    reason, signal_type, family, regime
+                ),
+                "supertrend_value": supertrend_value,
+                "donchian_high": donchian_high,
                 "donchian_low": _clean_float(row["donchian_low"]) if "donchian_low" in diag.columns else None,
+                **buy_zone,
                 "initial_stop_reference": initial_stop_reference,
                 "trailing_stop_reference": trailing_reference,
                 "execution_enabled": EXECUTION_ENABLED,  # always False
@@ -933,9 +1062,23 @@ def flatten_signal_for_csv(signal: dict) -> dict:
         "strategy_id": signal.get("strategy_id"),
         "signal_type": signal.get("signal_type"),
         "reason": signal.get("reason"),
+        "reason_human": signal.get("reason_human") or plan.get("reason_human"),
         "close_price": signal.get("close_price"),
         "atr_value": signal.get("atr_value"),
         "strategy_regime": signal.get("strategy_regime") or state.get("strategy_regime"),
+        "buy_zone_level": signal.get("buy_zone_level", state.get("buy_zone_level")),
+        "distance_to_buy_zone_price": signal.get(
+            "distance_to_buy_zone_price", state.get("distance_to_buy_zone_price")
+        ),
+        "distance_to_buy_zone_atr": signal.get(
+            "distance_to_buy_zone_atr", state.get("distance_to_buy_zone_atr")
+        ),
+        "distance_to_buy_zone_pct": signal.get(
+            "distance_to_buy_zone_pct", state.get("distance_to_buy_zone_pct")
+        ),
+        "buy_zone_relation": signal.get(
+            "buy_zone_relation", state.get("buy_zone_relation")
+        ),
         "reference_entry_price": plan.get("reference_entry_price"),
         "initial_stop_price": plan.get("initial_stop_price"),
         "trailing_stop_reference": plan.get("trailing_stop_reference"),

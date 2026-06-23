@@ -230,6 +230,12 @@ export interface StrategyState {
   donchian_high: number | null;
   donchian_low: number | null;
   donchian_position: number | null;
+  next_buy_condition: string;
+  buy_zone_level: number | null;
+  distance_to_buy_zone_price: number | null;
+  distance_to_buy_zone_atr: number | null;
+  distance_to_buy_zone_pct: number | null;
+  buy_zone_relation: string;
 }
 
 /**
@@ -252,6 +258,7 @@ export interface TradingPlan {
   point_value: number | null;
   lot_step: number | null;
   reason_human: string;
+  next_buy_condition: string;
   next_condition?: string | null;
   notes: string;
 }
@@ -282,6 +289,12 @@ export interface SignalRecord {
   trailing_stop_reference?: number | string | null;
   take_profit_price?: number | string | null;
   suggested_lot?: number | string | null;
+  next_buy_condition?: string | null;
+  buy_zone_level?: number | string | null;
+  distance_to_buy_zone_price?: number | string | null;
+  distance_to_buy_zone_atr?: number | string | null;
+  distance_to_buy_zone_pct?: number | string | null;
+  buy_zone_relation?: string | null;
   // enriched nested objects (present on latest_signal.json, not CSV rows)
   market_snapshot?: MarketSnapshot;
   strategy_state?: StrategyState;
@@ -301,6 +314,12 @@ export interface RecentCheck {
   supertrend_value: number | null;
   donchian_high: number | null;
   donchian_low: number | null;
+  next_buy_condition: string;
+  buy_zone_level: number | null;
+  distance_to_buy_zone_price: number | null;
+  distance_to_buy_zone_atr: number | null;
+  distance_to_buy_zone_pct: number | null;
+  buy_zone_relation: string;
   initial_stop_reference: number | null;
   trailing_stop_reference: number | null;
   execution_enabled: boolean | string;

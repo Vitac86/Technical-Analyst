@@ -49,7 +49,7 @@ function fmtLot(value: number | string | null | undefined): string {
   return num.toFixed(2);
 }
 
-/** NONE is shown as "NO ENTRY" everywhere in the UI. */
+/** NONE remains a concise status badge; reasons use human-readable wording. */
 function signalLabel(signalType: string | null | undefined): string {
   return signalType === "BUY" ? "BUY" : "NO ENTRY";
 }
@@ -60,8 +60,17 @@ function signalClass(signalType: string | null | undefined): string {
     : "slb-signal slb-signal-none";
 }
 
-function regimeLabel(regime: string | null | undefined): string {
+function regimeLabel(
+  regime: string | null | undefined,
+  isFreshLongSignal = false,
+): string {
   if (!regime) return "—";
+  if (regime === "bearish") return "Bearish / no long setup";
+  if (regime === "bullish") {
+    return isFreshLongSignal
+      ? "Bullish / fresh BUY signal"
+      : "Bullish / already in setup";
+  }
   return regime.charAt(0).toUpperCase() + regime.slice(1);
 }
 
@@ -70,6 +79,34 @@ function regimeClass(regime: string | null | undefined): string {
   if (regime === "bearish") return "slb-badge slb-badge-err";
   if (regime === "neutral") return "slb-badge slb-badge-warn";
   return "slb-badge slb-badge-idle";
+}
+
+function relationLabel(relation: string | null | undefined): string {
+  if (relation === "below_buy_zone") return "Below buy zone";
+  if (relation === "above_buy_zone") return "Above buy zone";
+  if (relation === "at_buy_zone") return "At buy zone";
+  return "Unknown";
+}
+
+function relationShortLabel(relation: string | null | undefined): string {
+  if (relation === "below_buy_zone") return "below";
+  if (relation === "above_buy_zone") return "above";
+  if (relation === "at_buy_zone") return "at";
+  return "unknown";
+}
+
+function relationClass(relation: string | null | undefined): string {
+  if (relation === "below_buy_zone") return "slb-badge slb-badge-warn";
+  if (relation === "above_buy_zone") return "slb-badge slb-badge-ok";
+  if (relation === "at_buy_zone") return "slb-badge slb-badge-idle";
+  return "slb-badge slb-badge-idle";
+}
+
+function humanReason(record: SignalRecord): string {
+  if (record.reason_human) return record.reason_human;
+  return record.reason === "no_entry"
+    ? "No fresh entry signal"
+    : record.reason;
 }
 
 const EQUITY_SOURCE_LABEL: Record<string, string> = {
@@ -247,6 +284,20 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
   const plan = latest?.trading_plan;
   const isBuy = latest?.signal_type === "BUY";
   const isDonchian = (latest?.strategy_id ?? "").includes("donchian");
+  const buyZoneLevel = state?.buy_zone_level ?? latest?.buy_zone_level;
+  const distanceToBuyZonePrice =
+    state?.distance_to_buy_zone_price ?? latest?.distance_to_buy_zone_price;
+  const distanceToBuyZoneAtr =
+    state?.distance_to_buy_zone_atr ?? latest?.distance_to_buy_zone_atr;
+  const distanceToBuyZonePct =
+    state?.distance_to_buy_zone_pct ?? latest?.distance_to_buy_zone_pct;
+  const buyZoneRelation =
+    state?.buy_zone_relation ?? latest?.buy_zone_relation;
+  const nextBuyCondition =
+    state?.next_buy_condition ??
+    plan?.next_buy_condition ??
+    plan?.next_condition ??
+    latest?.next_buy_condition;
   const equitySourceLabel = plan?.account_equity_source
     ? (EQUITY_SOURCE_LABEL[plan.account_equity_source] ?? plan.account_equity_source)
     : null;
@@ -472,14 +523,17 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
                   </span>
                 </div>
                 <p className="slb-card-reason">
-                  {latest.reason_human ?? latest.reason}
+                  {humanReason(latest)}
                 </p>
                 <dl className="slb-kv slb-kv-wide">
                   <div>
                     <dt>Strategy regime</dt>
                     <dd>
                       <span className={regimeClass(state?.strategy_regime)}>
-                        {regimeLabel(state?.strategy_regime ?? latest.strategy_regime)}
+                        {regimeLabel(
+                          state?.strategy_regime ?? latest.strategy_regime,
+                          state?.is_new_long_signal ?? isBuy,
+                        )}
                       </span>
                     </dd>
                   </div>
@@ -534,6 +588,46 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
                     <dt>Previous closed candle</dt>
                     <dd>{fmtDateTime(snapshot?.previous_closed_candle_time)}</dd>
                   </div>
+                  <div>
+                    <dt>
+                      {isDonchian
+                        ? "Donchian breakout level"
+                        : "SuperTrend reference boundary"}
+                    </dt>
+                    <dd>{fmtCell(buyZoneLevel)}</dd>
+                  </div>
+                  <div>
+                    <dt>
+                      {isDonchian
+                        ? "Distance to breakout (price)"
+                        : "Distance to bullish flip zone (price)"}
+                    </dt>
+                    <dd>{fmtCell(distanceToBuyZonePrice)}</dd>
+                  </div>
+                  <div>
+                    <dt>
+                      {isDonchian
+                        ? "Distance to breakout (ATR)"
+                        : "Distance to bullish flip zone (ATR)"}
+                    </dt>
+                    <dd>{fmtCell(distanceToBuyZoneAtr)}</dd>
+                  </div>
+                  <div>
+                    <dt>
+                      {isDonchian
+                        ? "Distance to breakout (%)"
+                        : "Distance to bullish flip zone (%)"}
+                    </dt>
+                    <dd>{fmtCell(distanceToBuyZonePct)}</dd>
+                  </div>
+                  <div>
+                    <dt>Relation</dt>
+                    <dd>
+                      <span className={relationClass(buyZoneRelation)}>
+                        {relationLabel(buyZoneRelation)}
+                      </span>
+                    </dd>
+                  </div>
                   {isDonchian ? (
                     <>
                       <div>
@@ -562,6 +656,12 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
                     </>
                   )}
                 </dl>
+                {!isDonchian ? (
+                  <p className="slb-reference-note">
+                    The boundary is a reference from the latest closed candle.
+                    SuperTrend can move on future candles.
+                  </p>
+                ) : null}
               </div>
 
               {/* C. Trading plan card */}
@@ -571,6 +671,7 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
                 </div>
                 {isBuy ? (
                   <>
+                    <p className="slb-card-reason">{humanReason(latest)}</p>
                     <dl className="slb-kv slb-kv-wide">
                       <div>
                         <dt>Reference entry price</dt>
@@ -616,27 +717,42 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
                       ) : null}
                     </dl>
                     <p className="slb-plan-note">
-                      Reference only. No order is sent, modified or closed.
-                      “Suggested lot reference” is sizing guidance, not an order
-                      instruction.
+                      This is signal-only; no order is sent. “Suggested lot
+                      reference” is sizing guidance, not an order instruction.
                     </p>
                   </>
                 ) : (
                   <>
-                    <p className="slb-card-reason">
-                      No new entry on the latest closed candle.
-                    </p>
+                    <div className="slb-next-buy">
+                      <h4>Next BUY condition</h4>
+                      <p className="slb-card-reason">{humanReason(latest)}</p>
+                      {nextBuyCondition ? (
+                        <p className="slb-next-buy-condition">
+                          {nextBuyCondition}
+                        </p>
+                      ) : null}
+                    </div>
                     <dl className="slb-kv slb-kv-wide">
                       <div>
-                        <dt>Why no entry</dt>
-                        <dd>{plan?.reason_human ?? latest.reason_human ?? latest.reason}</dd>
+                        <dt>
+                          {isDonchian
+                            ? "Donchian breakout level"
+                            : "SuperTrend reference boundary"}
+                        </dt>
+                        <dd>{fmtCell(buyZoneLevel)}</dd>
                       </div>
-                      {plan?.next_condition ? (
-                        <div>
-                          <dt>Next condition required</dt>
-                          <dd>{plan.next_condition}</dd>
-                        </div>
-                      ) : null}
+                      <div>
+                        <dt>Distance (price / ATR / %)</dt>
+                        <dd>
+                          {fmtCell(distanceToBuyZonePrice)} /{" "}
+                          {fmtCell(distanceToBuyZoneAtr)} ATR /{" "}
+                          {fmtCell(distanceToBuyZonePct)}%
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Relation</dt>
+                        <dd>{relationLabel(buyZoneRelation)}</dd>
+                      </div>
                       {plan?.trailing_stop_reference != null ? (
                         <div>
                           <dt>Trailing stop reference (informational)</dt>
@@ -645,8 +761,8 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
                       ) : null}
                     </dl>
                     <p className="slb-plan-note">
-                      Reference only. No entry price is shown because there is no
-                      new entry signal.
+                      This is signal-only; no order is sent. No entry price is
+                      shown because there is no fresh entry signal.
                     </p>
                   </>
                 )}
@@ -676,10 +792,10 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
                   <th>ATR</th>
                   <th>Regime</th>
                   <th>Signal</th>
-                  <th>Reason</th>
-                  <th>{isDonchian ? "Donchian high" : "SuperTrend"}</th>
-                  <th>Trailing ref</th>
-                  <th>Entry / stop (BUY)</th>
+                  <th>Buy zone</th>
+                  <th>Distance</th>
+                  <th>Relation</th>
+                  <th>Reason human</th>
                 </tr>
               </thead>
               <tbody>
@@ -690,7 +806,7 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
                     <td>{fmtCell(row.atr_value)}</td>
                     <td>
                       <span className={regimeClass(row.strategy_regime)}>
-                        {regimeLabel(row.strategy_regime)}
+                        {regimeLabel(row.strategy_regime, row.is_long_signal)}
                       </span>
                     </td>
                     <td>
@@ -698,18 +814,17 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
                         {signalLabel(row.signal_type)}
                       </span>
                     </td>
-                    <td>{row.reason}</td>
+                    <td>{fmtCell(row.buy_zone_level)}</td>
                     <td>
-                      {fmtCell(
-                        isDonchian ? row.donchian_high : row.supertrend_value,
-                      )}
+                      {fmtCell(row.distance_to_buy_zone_price)} /{" "}
+                      {fmtCell(row.distance_to_buy_zone_atr)} ATR
                     </td>
-                    <td>{fmtCell(row.trailing_stop_reference)}</td>
                     <td>
-                      {row.is_long_signal
-                        ? `${fmtCell(row.close_price)} / ${fmtCell(row.initial_stop_reference)}`
-                        : "—"}
+                      <span className={relationClass(row.buy_zone_relation)}>
+                        {relationShortLabel(row.buy_zone_relation)}
+                      </span>
                     </td>
+                    <td className="slb-table-reason">{row.reason_human}</td>
                   </tr>
                 ))}
               </tbody>
@@ -731,7 +846,7 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
                   <th>Generated at</th>
                   <th>Signal time</th>
                   <th>Signal</th>
-                  <th>Reason</th>
+                  <th>Reason human</th>
                   <th>Close</th>
                   <th>Entry ref</th>
                   <th>Initial stop</th>
@@ -749,7 +864,7 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
                         {signalLabel(row.signal_type)}
                       </span>
                     </td>
-                    <td>{row.reason}</td>
+                    <td className="slb-table-reason">{humanReason(row)}</td>
                     <td>{fmtCell(row.close_price)}</td>
                     <td>{fmtCell(row.reference_entry_price)}</td>
                     <td>{fmtCell(row.initial_stop_price)}</td>
