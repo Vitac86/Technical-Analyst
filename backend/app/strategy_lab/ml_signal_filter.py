@@ -115,8 +115,41 @@ CATBOOST_PARAMS: dict = dict(
     auto_class_weights="Balanced",
 )
 
-# Threshold grid scanned on validation (inclusive of 0.90).
-THRESHOLDS: np.ndarray = np.round(np.arange(0.50, 0.9001, 0.02), 2)
+# Probability-threshold grid scanned on validation. v1.5 started at 0.50 which
+# was almost always above the (compressed) predicted-probability range, so the
+# filter selected nothing. v1.5.1 widens the default floor to 0.20 (CLI-tunable)
+# and adds a percentile-based method (see TOP_PERCENTS) so selection no longer
+# depends on the absolute probability scale transferring across periods.
+DEFAULT_THRESHOLD_MIN = 0.20
+DEFAULT_THRESHOLD_MAX = 0.90
+DEFAULT_THRESHOLD_STEP = 0.02
+
+# Percentile cutoffs (fraction of the *validation* candidates kept, highest
+# probability first) evaluated by the ``top_percent`` selection method.
+TOP_PERCENTS: tuple[float, ...] = (0.05, 0.10, 0.15, 0.20, 0.30, 0.40)
+
+# Selection methods the validation search may consider.
+SELECTION_METHODS: tuple[str, ...] = ("probability_threshold", "top_percent")
+
+# Validation constraints a selection must satisfy to count as a real filter.
+MIN_SELECTED_TRADES = 30
+MIN_PROFIT_FACTOR = 1.1
+
+
+def build_threshold_grid(
+    threshold_min: float = DEFAULT_THRESHOLD_MIN,
+    threshold_max: float = DEFAULT_THRESHOLD_MAX,
+    threshold_step: float = DEFAULT_THRESHOLD_STEP,
+) -> np.ndarray:
+    """Inclusive probability-threshold grid ``[min, max]`` at ``step`` spacing."""
+    if threshold_step <= 0:
+        raise ValueError("threshold_step must be > 0")
+    grid = np.arange(threshold_min, threshold_max + threshold_step / 2, threshold_step)
+    return np.round(grid, 4)
+
+
+# Backwards-compatible default grid (used when no CLI overrides are supplied).
+THRESHOLDS: np.ndarray = build_threshold_grid()
 
 # Dataset column groups (identity / params / outcomes / targets are *never*
 # fed to the model -- only feature columns are).
@@ -799,81 +832,162 @@ def predict_proba(trained: TrainedModel, frame: pd.DataFrame) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 @dataclass
-class ThresholdChoice:
-    threshold: float
+class SelectionChoice:
+    """The winning selection rule chosen on validation (test never seen here)."""
+
+    selection_method: str  # "probability_threshold" | "top_percent"
+    cutoff_value: float  # threshold prob, or top-percent fraction
+    probability_cutoff: float  # the actual ``prob >=`` value applied everywhere
     validation_score: float
     status: str  # "ok" | "weak_threshold"
     table: pd.DataFrame
 
 
-def search_threshold(
+def _validation_score(metrics: dict) -> float:
+    """Spec validation score: ``pf*20 + avgR*20 + trades/20 - maxDD%``."""
+    avg_r = 0.0 if np.isnan(metrics["average_r"]) else metrics["average_r"]
+    return (
+        _clip_pf(metrics["profit_factor"]) * 20.0
+        + avg_r * 20.0
+        + metrics["trades"] / 20.0
+        - metrics["max_drawdown_pct"]
+    )
+
+
+def _passes_constraints(metrics: dict) -> bool:
+    """Validation gates: >=30 trades, PF>1.1, avgR>0."""
+    return bool(
+        metrics["trades"] >= MIN_SELECTED_TRADES
+        and metrics["profit_factor"] > MIN_PROFIT_FACTOR
+        and (not np.isnan(metrics["average_r"]) and metrics["average_r"] > 0)
+    )
+
+
+def _selection_candidate_row(
+    val: pd.DataFrame,
+    *,
+    probability_cutoff: float,
+    selection_method: str,
+    cutoff_value: float,
+    finalist: str,
+    cost_scenario: str,
+    feature_set: str,
+    target: str,
+) -> dict:
+    """Score one selection candidate (a single method + cutoff) on validation."""
+    selected = val[val["prob"] >= probability_cutoff]
+    m = pooled_metrics(selected)
+    selection_rate = float(len(selected) / len(val)) if len(val) else 0.0
+    return {
+        "finalist": finalist,
+        "cost_scenario": cost_scenario,
+        "feature_set": feature_set,
+        "target": target,
+        "selection_method": selection_method,
+        "cutoff_value": float(cutoff_value),
+        "probability_cutoff": float(probability_cutoff),
+        "selected_trades": m["trades"],
+        "selection_rate": selection_rate,
+        "win_rate": m["win_rate"],
+        "average_r": m["average_r"],
+        "median_r": m["median_r"],
+        "net_pnl": m["net_pnl"],
+        "profit_factor": m["profit_factor"],
+        "max_drawdown_pct": m["max_drawdown_pct"],
+        "average_predicted_probability": (
+            float(selected["prob"].mean()) if len(selected) else np.nan
+        ),
+        "validation_score": _validation_score(m),
+        "passes_constraints": _passes_constraints(m),
+    }
+
+
+def search_selection(
     val_frame: pd.DataFrame,
     val_prob: np.ndarray,
     *,
     finalist: str,
     cost_scenario: str,
-) -> ThresholdChoice:
-    """Evaluate the threshold grid on validation and pick the best.
+    feature_set: str,
+    target: str,
+    methods: Iterable[str] = SELECTION_METHODS,
+    thresholds: np.ndarray = THRESHOLDS,
+    top_percents: Iterable[float] = TOP_PERCENTS,
+) -> SelectionChoice:
+    """Pick the best selection rule on **validation only** (both methods).
 
-    The test set is *never* touched here. Constraints: selected_trades >= 30,
-    profit_factor > 1.1, average_r > 0. If none pass, the highest-scoring
-    threshold is returned with status ``weak_threshold``.
+    Two methods compete on the same validation set:
+
+      * ``probability_threshold`` -- keep ``prob >= t`` for each ``t`` in the
+        CLI-controlled grid.
+      * ``top_percent`` -- keep the top ``p`` fraction by probability. The
+        probability value at the ``1 - p`` validation quantile is frozen as the
+        ``prob >=`` cutoff and re-used unchanged on the test set, so the cutoff
+        is selected on validation only (no test-distribution leakage).
+
+    Constraints: ``selected_trades >= 30``, ``profit_factor > 1.1``,
+    ``average_r > 0``. The highest ``validation_score`` candidate that passes
+    wins (status ``ok``); if none pass, the highest-scoring candidate is
+    returned with status ``weak_threshold``.
     """
     val = val_frame.copy()
-    val["prob"] = val_prob
+    val["prob"] = np.asarray(val_prob, dtype=float)
+    methods = list(methods)
     rows: list[dict] = []
-    for threshold in THRESHOLDS:
-        selected = val[val["prob"] >= threshold]
-        m = pooled_metrics(selected)
-        selection_rate = float(len(selected) / len(val)) if len(val) else 0.0
-        score = (
-            _clip_pf(m["profit_factor"]) * 20.0
-            + (0.0 if np.isnan(m["average_r"]) else m["average_r"]) * 20.0
-            + m["trades"] / 20.0
-            - m["max_drawdown_pct"]
-        )
-        passes = (
-            m["trades"] >= 30
-            and m["profit_factor"] > 1.1
-            and (not np.isnan(m["average_r"]) and m["average_r"] > 0)
-        )
-        rows.append(
-            {
-                "finalist": finalist,
-                "cost_scenario": cost_scenario,
-                "threshold": float(threshold),
-                "selected_trades": m["trades"],
-                "selection_rate": selection_rate,
-                "win_rate": m["win_rate"],
-                "average_r": m["average_r"],
-                "median_r": m["median_r"],
-                "net_pnl": m["net_pnl"],
-                "profit_factor": m["profit_factor"],
-                "max_drawdown_pct": m["max_drawdown_pct"],
-                "average_predicted_probability": (
-                    float(selected["prob"].mean()) if len(selected) else np.nan
-                ),
-                "validation_score": float(score),
-                "passes_constraints": bool(passes),
-            }
-        )
+
+    if "probability_threshold" in methods:
+        for threshold in thresholds:
+            rows.append(
+                _selection_candidate_row(
+                    val,
+                    probability_cutoff=float(threshold),
+                    selection_method="probability_threshold",
+                    cutoff_value=float(threshold),
+                    finalist=finalist,
+                    cost_scenario=cost_scenario,
+                    feature_set=feature_set,
+                    target=target,
+                )
+            )
+    if "top_percent" in methods and len(val):
+        prob_values = val["prob"].to_numpy()
+        for pct in top_percents:
+            # Probability at the (1 - pct) quantile: ~pct of validation rows
+            # sit at or above it. This frozen probability is the cutoff applied
+            # to test, so "top 10%" is defined by the validation distribution.
+            cutoff = float(np.quantile(prob_values, 1.0 - pct))
+            rows.append(
+                _selection_candidate_row(
+                    val,
+                    probability_cutoff=cutoff,
+                    selection_method="top_percent",
+                    cutoff_value=float(pct),
+                    finalist=finalist,
+                    cost_scenario=cost_scenario,
+                    feature_set=feature_set,
+                    target=target,
+                )
+            )
+
     table = pd.DataFrame(rows)
 
-    # A threshold that selects *no* trades is not a usable filter (and scores a
-    # misleading 0.0). Restrict the choice to thresholds that actually select
-    # trades, and break score ties deterministically toward the lower (more
-    # inclusive) threshold so the result is reproducible.
+    # A candidate that selects *no* trades is not a usable filter (and scores a
+    # misleading 0.0). Restrict the choice to candidates that select trades and
+    # break score ties deterministically toward the more inclusive (lower)
+    # probability cutoff so the result is reproducible.
     usable = table[table["selected_trades"] > 0]
-    if usable.empty:  # pragma: no cover - 0.50 always selects something
+    if usable.empty:  # pragma: no cover - the lowest threshold selects something
         usable = table
     passing = usable[usable["passes_constraints"]]
     pool = passing if len(passing) else usable
     status = "ok" if len(passing) else "weak_threshold"
     best = pool.sort_values(
-        ["validation_score", "threshold"], ascending=[False, True]
+        ["validation_score", "probability_cutoff"], ascending=[False, True]
     ).iloc[0]
-    return ThresholdChoice(
-        threshold=float(best["threshold"]),
+    return SelectionChoice(
+        selection_method=str(best["selection_method"]),
+        cutoff_value=float(best["cutoff_value"]),
+        probability_cutoff=float(best["probability_cutoff"]),
         validation_score=float(best["validation_score"]),
         status=status,
         table=table,
@@ -890,29 +1004,34 @@ def filtered_backtest_row(
     *,
     finalist: str,
     cost_scenario: str,
-    threshold: float,
-    validation_score: float,
-    test_status: str,
+    feature_set: str,
+    target: str,
+    choice: SelectionChoice,
 ) -> dict:
     """Compare original vs filtered trades on the *test* period only.
 
     ``original`` is the full test candidate universe; ``filtered`` keeps only
-    candidates with ``prob >= threshold``. The threshold was chosen on
-    validation, so the test result is genuinely out-of-sample.
+    candidates with ``prob >= choice.probability_cutoff``. The cutoff was chosen
+    on validation, so the test result is genuinely out-of-sample. Both metrics
+    are computed from the *same* candidate universe (``test``) before filtering.
     """
     test = test_frame.copy()
-    test["prob"] = test_prob
+    test["prob"] = np.asarray(test_prob, dtype=float)
     original = pooled_metrics(test)
-    filtered = pooled_metrics(test[test["prob"] >= threshold])
+    filtered = pooled_metrics(test[test["prob"] >= choice.probability_cutoff])
     selection_rate = (
         float(filtered["trades"] / original["trades"]) if original["trades"] else 0.0
     )
     return {
         "finalist": finalist,
         "cost_scenario": cost_scenario,
-        "threshold": threshold,
-        "validation_score": validation_score,
-        "test_status": test_status,
+        "feature_set": feature_set,
+        "target": target,
+        "selection_method": choice.selection_method,
+        "cutoff_value": choice.cutoff_value,
+        "probability_cutoff": choice.probability_cutoff,
+        "validation_score": choice.validation_score,
+        "threshold_status": choice.status,
         "original_trades": original["trades"],
         "filtered_trades": filtered["trades"],
         "selection_rate": selection_rate,
@@ -929,17 +1048,27 @@ def filtered_backtest_row(
     }
 
 
+def evaluate_auc(trained: TrainedModel, frame: pd.DataFrame) -> float:
+    """ROC-AUC of a trained model on an arbitrary frame (NaN if not scorable)."""
+    work = frame.dropna(subset=[trained.target])
+    if len(work) == 0:
+        return float("nan")
+    y_true = work[trained.target].astype(int).to_numpy()
+    return _roc_auc(y_true, predict_proba(trained, work))
+
+
 def walk_forward_rows(
     frame: pd.DataFrame,
     trained: TrainedModel,
     *,
-    threshold: float,
-    test_status: str,
+    feature_set: str,
+    probability_cutoff: float,
+    threshold_status: str,
 ) -> list[dict]:
     """Original vs filtered metrics in each fixed walk-forward window.
 
-    The model and threshold are fixed (trained on the train period, threshold
-    chosen on validation); each window is scored with them. Windows inside the
+    The model and cutoff are fixed (trained on the train period, cutoff chosen
+    on validation); each window is scored with them. Windows inside the
     train/validation period are flagged ``in_sample`` so they are read with care.
     """
     work = frame.dropna(subset=[trained.target]).copy()
@@ -950,21 +1079,22 @@ def walk_forward_rows(
         window = work[_mask_range(work["signal_time"], start, end)]
         if len(window) == 0:
             continue
-        prob = predict_proba(trained, window)
         win = window.copy()
-        win["prob"] = prob
+        win["prob"] = predict_proba(trained, window)
         original = pooled_metrics(win)
-        filtered = pooled_metrics(win[win["prob"] >= threshold])
+        filtered = pooled_metrics(win[win["prob"] >= probability_cutoff])
         # In-sample if the window overlaps the train+validation period at all.
         in_sample = start <= VALIDATION_RANGE[1]
         rows.append(
             {
                 "finalist": trained.finalist,
                 "cost_scenario": trained.cost_scenario,
+                "feature_set": feature_set,
+                "target": trained.target,
                 "window": label,
                 "in_sample": bool(in_sample),
-                "threshold": threshold,
-                "test_status": test_status,
+                "probability_cutoff": probability_cutoff,
+                "threshold_status": threshold_status,
                 "original_trades": original["trades"],
                 "filtered_trades": filtered["trades"],
                 "original_profit_factor": original["profit_factor"],
@@ -980,13 +1110,15 @@ def walk_forward_rows(
     return rows
 
 
-def feature_importance_rows(trained: TrainedModel) -> list[dict]:
+def feature_importance_rows(trained: TrainedModel, *, feature_set: str) -> list[dict]:
     """Per-feature CatBoost importance for one trained model."""
     importances = trained.model.get_feature_importance()
     return [
         {
             "finalist": trained.finalist,
             "cost_scenario": trained.cost_scenario,
+            "feature_set": feature_set,
+            "target": trained.target,
             "feature": feat,
             "importance": float(imp),
         }
@@ -995,33 +1127,188 @@ def feature_importance_rows(trained: TrainedModel) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Ranking (spec section 12)
+# Probability diagnostics (spec section 3)
 # ---------------------------------------------------------------------------
 
-def rank_candidates(filtered_summary: pd.DataFrame) -> pd.DataFrame:
-    """Filter to genuinely-improved candidates and sort by ``ml_filter_score``."""
-    if filtered_summary.empty:
-        return filtered_summary.assign(ml_filter_score=[])
+# Predicted-probability quantiles reported per split.
+PROB_QUANTILES: tuple[float, ...] = (
+    0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99,
+)
 
-    df = filtered_summary.copy()
-    pf_gain = df["filtered_profit_factor"].apply(_clip_pf) - df[
-        "original_profit_factor"
-    ].apply(_clip_pf)
-    r_gain = df["filtered_average_r"] - df["original_average_r"]
-    df["ml_filter_score"] = (
+
+def probability_diagnostics_row(
+    prob: np.ndarray,
+    *,
+    finalist: str,
+    cost_scenario: str,
+    feature_set: str,
+    target: str,
+    split: str,
+) -> dict:
+    """Predicted-probability quantiles for one (model, split) -- spec section 3."""
+    p = np.asarray(prob, dtype=float)
+    row: dict = {
+        "finalist": finalist,
+        "cost_scenario": cost_scenario,
+        "feature_set": feature_set,
+        "target": target,
+        "split": split,
+        "rows": int(p.size),
+        "mean_predicted_probability": float(p.mean()) if p.size else np.nan,
+    }
+    for q in PROB_QUANTILES:
+        row[f"q{int(round(q * 100)):02d}"] = (
+            float(np.quantile(p, q)) if p.size else np.nan
+        )
+    return row
+
+
+def probability_decile_rows(
+    frame: pd.DataFrame,
+    prob: np.ndarray,
+    *,
+    finalist: str,
+    cost_scenario: str,
+    feature_set: str,
+    target: str,
+    split: str,
+) -> list[dict]:
+    """Per probability-decile positive-rate / average_r / net_pnl / count.
+
+    Deciles are equal-frequency buckets of the predicted probability (decile 0 =
+    lowest probability, decile 9 = highest). Heavily-tied probabilities collapse
+    to fewer buckets (``duplicates='drop'``) rather than erroring.
+    """
+    work = frame.copy()
+    work["prob"] = np.asarray(prob, dtype=float)
+    if len(work) == 0:
+        return []
+    try:
+        work["decile"] = pd.qcut(work["prob"], 10, labels=False, duplicates="drop")
+    except ValueError:  # pragma: no cover - all-equal probabilities
+        work["decile"] = 0
+    rows: list[dict] = []
+    for decile, grp in work.groupby("decile", sort=True):
+        rows.append(
+            {
+                "finalist": finalist,
+                "cost_scenario": cost_scenario,
+                "feature_set": feature_set,
+                "target": target,
+                "split": split,
+                "decile": int(decile),
+                "prob_min": float(grp["prob"].min()),
+                "prob_max": float(grp["prob"].max()),
+                "selected_trades": int(len(grp)),
+                "positive_rate": float(grp[target].mean()),
+                "average_r": float(grp["r_multiple"].mean()),
+                "net_pnl": float(grp["net_pnl"].sum()),
+            }
+        )
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Ablation summary + ranking (spec sections 6, 7)
+# ---------------------------------------------------------------------------
+
+def _safe_float(value: float) -> float:
+    """NaN -> 0.0 (used only inside additive scores, never for reported metrics)."""
+    return 0.0 if value is None or np.isnan(value) else float(value)
+
+
+def ml_filter_score(
+    *,
+    original_profit_factor: float,
+    filtered_profit_factor: float,
+    original_average_r: float,
+    filtered_average_r: float,
+    filtered_net_pnl: float,
+    filtered_max_drawdown_pct: float,
+    filtered_trades: int,
+) -> float:
+    """Spec section 7 ranking score (PF/avgR gains dominate; DD penalised)."""
+    pf_gain = _clip_pf(filtered_profit_factor) - _clip_pf(original_profit_factor)
+    r_gain = _safe_float(filtered_average_r) - _safe_float(original_average_r)
+    return (
         pf_gain * 30.0
         + r_gain * 30.0
-        + df["filtered_net_pnl"] / 100.0
-        - df["filtered_max_drawdown_pct"]
-        + df["filtered_trades"] / 10.0
+        + filtered_net_pnl / 100.0
+        - filtered_max_drawdown_pct
+        + filtered_trades / 10.0
     )
 
+
+def ablation_row(
+    filtered_row: dict,
+    *,
+    feature_count: int,
+    validation_auc: float,
+    test_auc: float,
+) -> dict:
+    """Map one filtered-backtest row to the ablation_summary schema (section 6)."""
+    pf_o = filtered_row["original_profit_factor"]
+    pf_f = filtered_row["filtered_profit_factor"]
+    r_o = filtered_row["original_average_r"]
+    r_f = filtered_row["filtered_average_r"]
+    dd_o = filtered_row["original_max_drawdown_pct"]
+    dd_f = filtered_row["filtered_max_drawdown_pct"]
+    return {
+        "finalist": filtered_row["finalist"],
+        "cost_scenario": filtered_row["cost_scenario"],
+        "feature_set": filtered_row["feature_set"],
+        "target": filtered_row["target"],
+        "feature_count": int(feature_count),
+        "validation_auc": validation_auc,
+        "test_auc": test_auc,
+        "selected_method": filtered_row["selection_method"],
+        "selected_cutoff": filtered_row["cutoff_value"],
+        "probability_cutoff": filtered_row["probability_cutoff"],
+        "validation_score": filtered_row["validation_score"],
+        "threshold_status": filtered_row["threshold_status"],
+        "original_test_trades": filtered_row["original_trades"],
+        "filtered_test_trades": filtered_row["filtered_trades"],
+        "selection_rate": filtered_row["selection_rate"],
+        "original_profit_factor": pf_o,
+        "filtered_profit_factor": pf_f,
+        "original_average_r": r_o,
+        "filtered_average_r": r_f,
+        "original_max_drawdown_pct": dd_o,
+        "filtered_max_drawdown_pct": dd_f,
+        "original_net_pnl": filtered_row["original_net_pnl"],
+        "filtered_net_pnl": filtered_row["filtered_net_pnl"],
+        "improvement_pf": _clip_pf(pf_f) - _clip_pf(pf_o),
+        "improvement_average_r": _safe_float(r_f) - _safe_float(r_o),
+        # Positive == drawdown reduced (filtered < original).
+        "improvement_drawdown": dd_o - dd_f,
+        "ml_filter_score": ml_filter_score(
+            original_profit_factor=pf_o,
+            filtered_profit_factor=pf_f,
+            original_average_r=r_o,
+            filtered_average_r=r_f,
+            filtered_net_pnl=filtered_row["filtered_net_pnl"],
+            filtered_max_drawdown_pct=dd_f,
+            filtered_trades=filtered_row["filtered_trades"],
+        ),
+    }
+
+
+def rank_candidates(ablation_summary: pd.DataFrame) -> pd.DataFrame:
+    """Keep only genuinely-improved test candidates, sorted by ``ml_filter_score``.
+
+    Gates (spec section 7): filtered_trades >= 20, filtered PF > original PF,
+    filtered avgR > original avgR, filtered max-DD <= original max-DD, and the
+    selection must not be a ``weak_threshold`` fallback.
+    """
+    if ablation_summary.empty:
+        return ablation_summary.copy()
+    df = ablation_summary.copy()
     mask = (
-        (df["filtered_trades"] >= 20)
+        (df["filtered_test_trades"] >= 20)
         & (df["filtered_profit_factor"] > df["original_profit_factor"])
         & (df["filtered_average_r"] > df["original_average_r"])
         & (df["filtered_max_drawdown_pct"] <= df["original_max_drawdown_pct"])
-        & (df["test_status"] != "weak_threshold")
+        & (df["threshold_status"] != "weak_threshold")
     )
     return (
         df[mask]
@@ -1062,16 +1349,33 @@ def validate_dataset(dataset: pd.DataFrame, feature_columns: list[str]) -> list[
         raise ValueError(f"{dup} duplicate signal_id rows (must be unique per config)")
     notes.append("signal_id is unique across the dataset")
 
-    # 4. Time-split ordering: train < validation < test by signal_time.
+    # 4. Time-split ordering: train < validation < test by signal_time, checked
+    #    both globally and per finalist (the strictest guarantee against any
+    #    future row leaking into an earlier split).
     if "split" in dataset.columns:
-        for fin, grp in dataset.groupby("finalist", sort=False):
+        def _check_order(grp: pd.DataFrame, scope: str) -> None:
             tr = grp[grp["split"] == "train"]["signal_time"]
             va = grp[grp["split"] == "validation"]["signal_time"]
             te = grp[grp["split"] == "test"]["signal_time"]
             if len(tr) and len(va) and tr.max() >= va.min():
-                raise ValueError(f"{fin}: train max signal_time >= validation min")
+                raise ValueError(f"{scope}: train max signal_time >= validation min")
             if len(va) and len(te) and va.max() >= te.min():
-                raise ValueError(f"{fin}: validation max signal_time >= test min")
-        notes.append("train < validation < test by signal_time (per finalist)")
+                raise ValueError(f"{scope}: validation max signal_time >= test min")
+
+        _check_order(dataset, "global")
+        for fin, grp in dataset.groupby("finalist", sort=False):
+            _check_order(grp, str(fin))
+        notes.append("train < validation < test by signal_time (global + per finalist)")
+
+    # 5. Selection-protocol guarantees (enforced structurally by the pipeline,
+    #    asserted here so they are visible in the run log):
+    #      * the probability threshold / top-percent cutoff is chosen by
+    #        search_selection() on the validation split only;
+    #      * filtered_backtest_row() computes original & filtered test metrics
+    #        once, from the same candidate universe, after the cutoff is fixed.
+    notes.append(
+        "cutoff selected on validation only; test metrics computed once "
+        "(original & filtered share one candidate universe)"
+    )
 
     return notes

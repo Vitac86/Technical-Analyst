@@ -40,6 +40,17 @@ trades; driven by run_ml_signal_filter):
     * a CatBoost classifier that only filters existing rule-based long signals,
       with the probability threshold chosen on validation data only and the
       held-out test period used purely for the filtered-vs-unfiltered comparison
+
+Version 1.5.1 scope (ML signal-filter *ablation*; still no UI, still leakage-safe;
+driven by run_ml_signal_filter):
+    * feature-set ablation modes (all_features / no_absolute_price /
+      normalized_only / no_higher_timeframe / higher_timeframe_only /
+      no_time_features) so the failure of the v1.5 filter to transfer to the
+      2025-2026 test period can be attributed to specific feature groups
+    * a percentile (top_percent) selection method alongside the widened
+      probability-threshold grid, both chosen on validation only
+    * predicted-probability diagnostics (quantiles + per-decile outcomes) and a
+      consolidated ablation_summary ranking the genuinely-improved combinations
 """
 
 __all__ = [

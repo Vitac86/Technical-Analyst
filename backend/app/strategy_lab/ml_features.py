@@ -24,6 +24,8 @@ The module depends on pandas/numpy only and never mutates its inputs.
 
 from __future__ import annotations
 
+from typing import Iterable
+
 import numpy as np
 import pandas as pd
 
@@ -396,6 +398,148 @@ def feature_columns_for_finalist(finalist: str) -> list[str]:
         cols += [f"{c}_h4" for c in HTF_FEATURE_SUBSET]
     cols += [f"{c}_d1" for c in HTF_FEATURE_SUBSET]
     return cols
+
+
+# ---------------------------------------------------------------------------
+# Feature-set ablation modes (Strategy Lab v1.5.1)
+# ---------------------------------------------------------------------------
+# The v1.5 filter consumed *every* feature. v1.5.1 lets us train on curated
+# subsets to isolate *why* the filter failed to transfer to the 2025-2026 test
+# period -- in particular whether absolute price-level features (which sit far
+# outside the 2015-2021 training price range) or unstable feature groups are to
+# blame. The dataset still carries every column; a mode only changes which
+# columns a given model is allowed to see (selection happens at train time).
+
+FEATURE_SET_MODES: tuple[str, ...] = (
+    "all_features",
+    "no_absolute_price",
+    "normalized_only",
+    "no_higher_timeframe",
+    "higher_timeframe_only",
+    "no_time_features",
+)
+
+# Higher-timeframe suffixes appended at merge time.
+HTF_SUFFIXES: tuple[str, ...] = ("_h4", "_d1")
+
+# Raw, dimensioned price/level features. Their value lives in the absolute
+# price domain, so a model trained on 2015-2021 levels cannot generalise to the
+# far higher 2025-2026 levels. ``no_absolute_price`` drops these (and their
+# higher-timeframe versions); the ``_pct`` / ``_atr`` / ``ratio`` derivatives
+# of ATR are intentionally *kept* (they are dimensionless).
+ABSOLUTE_PRICE_BASE_FEATURES: tuple[str, ...] = (
+    "close",
+    "ema_20",
+    "ema_50",
+    "ema_100",
+    "ema_200",
+    "atr_14",
+    "atr_50",
+)
+
+# Calendar / session features (single-timeframe only; HTF context has none).
+TIME_FEATURES: tuple[str, ...] = (
+    "hour_utc",
+    "day_of_week",
+    "month",
+    "quarter",
+    "is_monday",
+    "is_friday",
+)
+
+_ABSOLUTE_PRICE_SET = frozenset(ABSOLUTE_PRICE_BASE_FEATURES)
+_TIME_FEATURE_SET = frozenset(TIME_FEATURES)
+
+
+def strip_htf_suffix(column: str) -> str:
+    """Return ``column`` without a trailing ``_h4`` / ``_d1`` suffix."""
+    for suffix in HTF_SUFFIXES:
+        if column.endswith(suffix):
+            return column[: -len(suffix)]
+    return column
+
+
+def is_higher_timeframe_feature(column: str) -> bool:
+    """True for merged higher-timeframe context columns (``*_h4`` / ``*_d1``)."""
+    return column.endswith(HTF_SUFFIXES)
+
+
+def is_absolute_price_feature(column: str) -> bool:
+    """True for a raw price/level feature (any timeframe), e.g. ``close``,
+    ``ema_200``, ``atr_14`` and their ``_h4`` / ``_d1`` versions. The base name
+    is matched exactly so ATR derivatives (``atr_14_pct``, ``atr_ratio_14_50``,
+    ``*_atr``) are *not* flagged as absolute."""
+    return strip_htf_suffix(column) in _ABSOLUTE_PRICE_SET
+
+
+def is_time_feature(column: str) -> bool:
+    """True for a calendar / session feature."""
+    return column in _TIME_FEATURE_SET
+
+
+def is_normalized_feature(column: str) -> bool:
+    """True for a dimensionless / normalised feature (``normalized_only`` mode).
+
+    The base name (after stripping any HTF suffix) must match one of the
+    normalised families in the v1.5.1 spec: log returns, ATR-percentages,
+    ratios, range/channel positions, ATR-normalised distances & slopes,
+    RSI/ADX/DI, close-above-EMA flags, bars-since counters, Bollinger
+    percent-b / bandwidth, and the time features. Raw levels (``close``,
+    ``ema_*``, ``atr_14/50``) and raw unnormalised MACD line/signal/hist are
+    excluded because they are not dimensionless.
+    """
+    base = strip_htf_suffix(column)
+    if base in _TIME_FEATURE_SET:
+        return True
+    if base.startswith(
+        (
+            "log_return_",
+            "rsi_",
+            "adx_",
+            "plus_di_",
+            "minus_di_",
+            "close_above_ema_",
+            "bars_since_",
+            "bollinger_percent_b_",
+            "bollinger_bandwidth_",
+        )
+    ):
+        return True
+    if base.endswith(("_pct", "_atr")):
+        return True
+    if "ratio" in base or "position" in base:
+        return True
+    return False
+
+
+def select_feature_set(columns: Iterable[str], mode: str) -> list[str]:
+    """Subset ``columns`` (in their original order) for one ablation ``mode``.
+
+    ``columns`` is typically :func:`feature_columns_for_finalist` intersected
+    with the columns actually present in the dataset. The returned list never
+    re-orders or duplicates entries.
+    """
+    cols = list(columns)
+    if mode == "all_features":
+        return cols
+    if mode == "no_absolute_price":
+        return [c for c in cols if not is_absolute_price_feature(c)]
+    if mode == "normalized_only":
+        return [c for c in cols if is_normalized_feature(c)]
+    if mode == "no_higher_timeframe":
+        return [c for c in cols if not is_higher_timeframe_feature(c)]
+    if mode == "higher_timeframe_only":
+        return [c for c in cols if is_higher_timeframe_feature(c) or is_time_feature(c)]
+    if mode == "no_time_features":
+        return [c for c in cols if not is_time_feature(c)]
+    raise ValueError(
+        f"Unknown feature-set mode {mode!r}; expected one of {FEATURE_SET_MODES}"
+    )
+
+
+def feature_columns_for_finalist_mode(finalist: str, mode: str) -> list[str]:
+    """Feature columns for ``finalist`` restricted to one ablation ``mode``."""
+    return select_feature_set(feature_columns_for_finalist(finalist), mode)
 
 
 def assert_feature_names_clean(columns: list[str]) -> None:
