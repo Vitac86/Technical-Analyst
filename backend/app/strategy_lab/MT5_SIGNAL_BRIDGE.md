@@ -30,6 +30,12 @@ percentage distance. For C, the equivalent reference is the Donchian breakout
 high. These values explain the latest closed candle; they do not predict or
 guarantee the next trigger.
 
+**v1.7.4** makes the D diagnostics robust for every closed candle. The raw
+SuperTrend value is normalized to `supertrend_value`, `buy_zone_level` always
+matches it when available, and both latest-signal and recent-check payloads
+carry the same boundary, relation and distance fields. In the UI,
+`buy_zone_level` is displayed as **Current SuperTrend boundary**.
+
 The bridge connects to a **locally running** MetaTrader 5 terminal, reads a
 Strategy Lab v1.6 exported strategy config, pulls recent candles, computes the
 **exact same** rule-based signal as the backtester (by reusing
@@ -249,8 +255,9 @@ back-compat. The new value is in three nested objects:
 `donchian_position` for **C**. It also includes:
 
 - `next_buy_condition` — the closed-candle rule required for the next fresh BUY.
-- `buy_zone_level` — D's current SuperTrend reference boundary while bearish or
-  neutral, or C's Donchian breakout high.
+- `buy_zone_level` — D's current SuperTrend reference boundary whenever the
+  indicator value is available, or C's Donchian breakout high. For D the UI
+  displays this field as **Current SuperTrend boundary**.
 - `distance_to_buy_zone_price` — non-negative price distance to that reference.
 - `distance_to_buy_zone_atr` — the same distance divided by the current ATR.
 - `distance_to_buy_zone_pct` — the same distance as a percentage of close.
@@ -263,6 +270,11 @@ SuperTrend can move when future candles close. A BUY requires a fresh bullish
 flip; an already-bullish regime does not repeat the entry. For **C**, a BUY
 requires a fully closed H1 candle to break above the Donchian high used by the
 strategy.
+
+`supertrend_distance_atr` is the absolute distance
+`abs(close_price - supertrend_value) / atr_value`.
+`signed_distance_to_supertrend_atr` keeps direction:
+`(close_price - supertrend_value) / atr_value`.
 
 **`trading_plan`** — a labelled **reference**, never an order:
 
@@ -305,8 +317,9 @@ current SuperTrend value is only a movable reference boundary.
 - `NONE` / **NO ENTRY** means there is no fresh long entry on that candle. For D,
   this can mean the regime is bearish and waiting for a flip, or that it is
   already bullish and the strategy refuses to repeat the same setup.
-- v1.7.x is long-only. Bearish conditions can explain why there is no long
-  entry, but they do not create a SELL or SHORT signal.
+- v1.7.x is long-only. A bearish D regime means **no long setup**; it is not a
+  sell signal. Bearish conditions explain why there is no long entry, but they
+  do not create a SELL or SHORT signal.
 
 ### `recent_checks` vs the official signal history (v1.7.3)
 

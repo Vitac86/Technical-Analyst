@@ -101,6 +101,13 @@ REFERENCE_ENTRY_TYPE: str = "next_bar_open_or_market_reference"
 DEFAULT_RECENT_LIMIT: int = 10
 MAX_RECENT_LIMIT: int = 100
 
+SUPER_TREND_VALUE_COLUMNS: tuple[str, ...] = (
+    "supertrend_value",
+    "supertrend",
+    "SuperTrend",
+    "st",
+)
+
 SUPER_TREND_NEXT_BUY_CONDITION: str = (
     "A BUY signal appears only after a fresh bullish SuperTrend flip on a fully "
     "closed H4 candle. Price must close above the current SuperTrend reference "
@@ -396,7 +403,8 @@ def humanize_reason(
         if regime == "bearish":
             return (
                 "No entry: SuperTrend regime is bearish on the latest closed H4 "
-                "candle. The strategy waits for a fresh bullish flip."
+                "candle. Current close is below the SuperTrend reference boundary. "
+                "The strategy waits for a fresh bullish flip."
             )
         if regime == "bullish":
             return (
@@ -425,6 +433,52 @@ def next_long_condition(family: str) -> str:
     if family == "donchian":
         return DONCHIAN_NEXT_BUY_CONDITION
     return "A fresh long entry condition on a closed candle."
+
+
+def extract_supertrend_value(row: pd.Series | dict[str, object]) -> Optional[float]:
+    """Read a SuperTrend value from a known column alias.
+
+    The repository currently emits ``supertrend``. Explicit aliases keep the
+    bridge resilient to a renamed diagnostic column, while conflicting
+    non-null aliases fail loudly instead of silently choosing one.
+    """
+    values: list[tuple[str, float]] = []
+    for column in SUPER_TREND_VALUE_COLUMNS:
+        if column not in row:
+            continue
+        value = _clean_float(row[column])
+        if value is not None:
+            values.append((column, value))
+
+    if not values:
+        return None
+
+    source_column, source_value = values[0]
+    for column, value in values[1:]:
+        if not math.isclose(source_value, value, rel_tol=1e-9, abs_tol=1e-9):
+            raise BridgeError(
+                "Conflicting SuperTrend columns: "
+                f"{source_column}={source_value} and {column}={value}."
+            )
+    return source_value
+
+
+def _supertrend_atr_distances(
+    close_price: Optional[float],
+    supertrend_value: Optional[float],
+    atr_value: Optional[float],
+) -> tuple[Optional[float], Optional[float]]:
+    """Return absolute and signed close-to-SuperTrend distances in ATR units."""
+    if (
+        close_price is None
+        or supertrend_value is None
+        or atr_value is None
+        or atr_value <= 0
+    ):
+        return None, None
+    signed = _clean_float((close_price - supertrend_value) / atr_value)
+    absolute = _clean_float(abs(close_price - supertrend_value) / atr_value)
+    return absolute, signed
 
 
 def build_buy_zone_diagnostics(
@@ -470,18 +524,20 @@ def build_buy_zone_diagnostics(
         if distance is not None and close_price not in (None, 0)
         else None
     )
-    buy_zone_level = (
-        level
-        if family != "supertrend" or regime in {"bearish", "neutral"}
-        else None
+    supertrend_distance_atr, signed_supertrend_distance_atr = (
+        _supertrend_atr_distances(close_price, supertrend_value, atr_value)
+        if family == "supertrend"
+        else (None, None)
     )
     return {
         "next_buy_condition": next_long_condition(family),
-        "buy_zone_level": _clean_float(buy_zone_level),
+        "buy_zone_level": _clean_float(level),
         "distance_to_buy_zone_price": _clean_float(distance),
         "distance_to_buy_zone_atr": distance_atr,
         "distance_to_buy_zone_pct": distance_pct,
         "buy_zone_relation": relation,
+        "supertrend_distance_atr": supertrend_distance_atr,
+        "signed_distance_to_supertrend_atr": signed_supertrend_distance_atr,
     }
 
 
@@ -595,8 +651,19 @@ def _add_supertrend_state(
         multiplier=float(strategy_params.get("multiplier", preset.defaults["multiplier"])),
     )
     direction = st["direction"].to_numpy()
-    diag["supertrend"] = st["supertrend"].to_numpy()
-    diag["supertrend_distance_atr"] = (diag["close"] - diag["supertrend"]) / diag["atr"]
+    supertrend_values = pd.to_numeric(
+        pd.Series(
+            [extract_supertrend_value(row) for _, row in st.iterrows()],
+            index=st.index,
+        ),
+        errors="coerce",
+    ).to_numpy()
+    diag["supertrend_value"] = supertrend_values
+    # Retain the original name for compatibility with existing diagnostics.
+    diag["supertrend"] = supertrend_values
+    signed_distance = (diag["close"] - diag["supertrend_value"]) / diag["atr"]
+    diag["signed_distance_to_supertrend_atr"] = signed_distance
+    diag["supertrend_distance_atr"] = signed_distance.abs()
     regime = np.where(direction == 1, "bullish", np.where(direction == -1, "bearish", "unknown"))
     diag["regime"] = regime.astype(object)
 
@@ -831,9 +898,7 @@ def _record_from_diagnostics(
     close_price = _clean_float(last["close"])
     atr_value = _clean_float(last["atr"])
     regime = str(last["regime"]) if "regime" in diag.columns else "unknown"
-    supertrend_value = (
-        _clean_float(last["supertrend"]) if "supertrend" in diag.columns else None
-    )
+    supertrend_value = extract_supertrend_value(last)
     donchian_high = (
         _clean_float(last["donchian_high"]) if "donchian_high" in diag.columns else None
     )
@@ -867,11 +932,6 @@ def _record_from_diagnostics(
         "is_new_long_signal": signal_type == "BUY",
         "bars_since_last_long_signal": _bars_since_last_long(diag),
         "supertrend_value": supertrend_value,
-        "supertrend_distance_atr": (
-            _clean_float(last["supertrend_distance_atr"])
-            if "supertrend_distance_atr" in diag.columns
-            else None
-        ),
         "donchian_high": donchian_high,
         "donchian_low": _clean_float(last["donchian_low"]) if "donchian_low" in diag.columns else None,
         "donchian_position": (
@@ -940,12 +1000,17 @@ def _record_from_diagnostics(
         "take_profit_atr": take_profit_atr,
         "strategy_regime": regime,
         # v1.7.3 flat diagnostics (also used by CSV history consumers)
+        "supertrend_value": supertrend_value,
         "next_buy_condition": buy_zone["next_buy_condition"],
         "buy_zone_level": buy_zone["buy_zone_level"],
         "distance_to_buy_zone_price": buy_zone["distance_to_buy_zone_price"],
         "distance_to_buy_zone_atr": buy_zone["distance_to_buy_zone_atr"],
         "distance_to_buy_zone_pct": buy_zone["distance_to_buy_zone_pct"],
         "buy_zone_relation": buy_zone["buy_zone_relation"],
+        "supertrend_distance_atr": buy_zone["supertrend_distance_atr"],
+        "signed_distance_to_supertrend_atr": buy_zone[
+            "signed_distance_to_supertrend_atr"
+        ],
         # enriched nested objects
         "market_snapshot": market_snapshot,
         "strategy_state": strategy_state,
@@ -986,9 +1051,7 @@ def build_recent_checks(
         close_price = _clean_float(row["close"])
         atr_value = _clean_float(row["atr"])
         regime = str(row["regime"]) if "regime" in diag.columns else "unknown"
-        supertrend_value = (
-            _clean_float(row["supertrend"]) if "supertrend" in diag.columns else None
-        )
+        supertrend_value = extract_supertrend_value(row)
         donchian_high = (
             _clean_float(row["donchian_high"]) if "donchian_high" in diag.columns else None
         )

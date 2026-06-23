@@ -467,6 +467,13 @@ def test_enriched_buy_has_trading_plan(d_config: dict) -> None:
     assert state["is_new_long_signal"] is True
     assert state["bars_since_last_long_signal"] == 0
     assert state["supertrend_value"] is not None
+    assert state["buy_zone_level"] == state["supertrend_value"]
+    assert rec["supertrend_value"] == state["supertrend_value"]
+    assert rec["supertrend_distance_atr"] == state["supertrend_distance_atr"]
+    assert (
+        rec["signed_distance_to_supertrend_atr"]
+        == state["signed_distance_to_supertrend_atr"]
+    )
     assert rec["reason_human"] == (
         "BUY: latest closed H4 candle produced a fresh bullish SuperTrend flip."
     )
@@ -505,9 +512,22 @@ def test_d_bearish_none_has_buy_zone_distance(d_config: dict) -> None:
     assert state["distance_to_buy_zone_price"] > 0
     assert state["distance_to_buy_zone_atr"] > 0
     assert state["distance_to_buy_zone_pct"] > 0
+    expected_atr_distance = (
+        state["supertrend_value"] - rec["close_price"]
+    ) / rec["atr_value"]
+    assert state["distance_to_buy_zone_atr"] == pytest.approx(
+        expected_atr_distance
+    )
+    assert state["supertrend_distance_atr"] == pytest.approx(
+        expected_atr_distance
+    )
+    assert state["signed_distance_to_supertrend_atr"] == pytest.approx(
+        -expected_atr_distance
+    )
     assert rec["reason_human"] == (
         "No entry: SuperTrend regime is bearish on the latest closed H4 candle. "
-        "The strategy waits for a fresh bullish flip."
+        "Current close is below the SuperTrend reference boundary. The strategy "
+        "waits for a fresh bullish flip."
     )
 
 
@@ -521,7 +541,43 @@ def test_d_bullish_none_explains_no_repeated_entry(d_config: dict) -> None:
         "flip on the latest closed H4 candle. The strategy does not repeat entries."
     )
     assert rec["strategy_state"]["buy_zone_relation"] == "above_buy_zone"
+    assert (
+        rec["strategy_state"]["buy_zone_level"]
+        == rec["strategy_state"]["supertrend_value"]
+    )
     assert rec["strategy_state"]["distance_to_buy_zone_price"] == 0
+    assert rec["strategy_state"]["distance_to_buy_zone_atr"] == 0
+    assert rec["strategy_state"]["distance_to_buy_zone_pct"] == 0
+    assert rec["strategy_state"]["supertrend_distance_atr"] > 0
+    assert rec["strategy_state"]["signed_distance_to_supertrend_atr"] > 0
+
+
+def test_supertrend_value_aliases_and_conflicts() -> None:
+    for column in bridge.SUPER_TREND_VALUE_COLUMNS:
+        assert bridge.extract_supertrend_value({column: 4197.2}) == 4197.2
+
+    assert bridge.extract_supertrend_value(
+        {"supertrend": 4197.2, "supertrend_value": 4197.2}
+    ) == 4197.2
+    with pytest.raises(bridge.BridgeError, match="Conflicting SuperTrend columns"):
+        bridge.extract_supertrend_value(
+            {"supertrend": 4197.2, "supertrend_value": 4200.0}
+        )
+
+
+def test_supertrend_reference_example_distance() -> None:
+    diagnostics = bridge.build_buy_zone_diagnostics(
+        family="supertrend",
+        regime="bearish",
+        close_price=4113.1,
+        supertrend_value=4197.2,
+        atr_value=84.1 / 2.08,
+    )
+
+    assert diagnostics["buy_zone_level"] == 4197.2
+    assert diagnostics["distance_to_buy_zone_price"] == pytest.approx(84.1)
+    assert diagnostics["distance_to_buy_zone_atr"] == pytest.approx(2.08)
+    assert diagnostics["buy_zone_relation"] == "below_buy_zone"
 
 
 def test_none_trailing_reference_only_when_bullish(d_config: dict) -> None:
@@ -613,6 +669,24 @@ def test_recent_checks_multiple_rows_no_duplicate_signal(
     assert all("distance_to_buy_zone_price" in row for row in checks)
     assert all("distance_to_buy_zone_atr" in row for row in checks)
     assert all("buy_zone_relation" in row for row in checks)
+    bearish_rows = [
+        row
+        for row in checks
+        if row["strategy_regime"] == "bearish"
+        and row["supertrend_value"] is not None
+    ]
+    assert bearish_rows
+    for row in bearish_rows:
+        assert row["buy_zone_level"] == row["supertrend_value"]
+        assert row["buy_zone_relation"] == "below_buy_zone"
+        expected = (
+            row["supertrend_value"] - row["close_price"]
+        ) / row["atr_value"]
+        assert row["distance_to_buy_zone_atr"] == pytest.approx(expected)
+        assert row["supertrend_distance_atr"] == pytest.approx(abs(expected))
+        assert row["signed_distance_to_supertrend_atr"] == pytest.approx(
+            -expected
+        )
     # Exactly one of the recent rows is a long signal (the latest closed candle).
     assert sum(1 for row in checks if row["is_long_signal"]) == 1
 

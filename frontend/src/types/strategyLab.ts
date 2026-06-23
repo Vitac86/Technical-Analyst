@@ -227,6 +227,7 @@ export interface StrategyState {
   bars_since_last_long_signal: number | null;
   supertrend_value: number | null;
   supertrend_distance_atr: number | null;
+  signed_distance_to_supertrend_atr: number | null;
   donchian_high: number | null;
   donchian_low: number | null;
   donchian_position: number | null;
@@ -289,6 +290,9 @@ export interface SignalRecord {
   trailing_stop_reference?: number | string | null;
   take_profit_price?: number | string | null;
   suggested_lot?: number | string | null;
+  supertrend_value?: number | string | null;
+  supertrend_distance_atr?: number | string | null;
+  signed_distance_to_supertrend_atr?: number | string | null;
   next_buy_condition?: string | null;
   buy_zone_level?: number | string | null;
   distance_to_buy_zone_price?: number | string | null;
@@ -312,6 +316,8 @@ export interface RecentCheck {
   reason: string;
   reason_human: string;
   supertrend_value: number | null;
+  supertrend_distance_atr: number | null;
+  signed_distance_to_supertrend_atr: number | null;
   donchian_high: number | null;
   donchian_low: number | null;
   next_buy_condition: string;

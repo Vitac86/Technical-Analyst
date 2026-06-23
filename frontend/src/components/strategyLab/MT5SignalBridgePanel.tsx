@@ -23,6 +23,11 @@ import type {
   SignalRecord,
 } from "../../types/strategyLab";
 import { fmtDateTime } from "./format";
+import {
+  resolveBoundaryDistance,
+  resolveBoundaryRelation,
+  resolveReferenceBoundary,
+} from "./mt5SignalDiagnostics";
 
 interface Props {
   /** Build the current Strategy Lab config request (preset + overrides + costs). */
@@ -81,18 +86,27 @@ function regimeClass(regime: string | null | undefined): string {
   return "slb-badge slb-badge-idle";
 }
 
-function relationLabel(relation: string | null | undefined): string {
-  if (relation === "below_buy_zone") return "Below buy zone";
-  if (relation === "above_buy_zone") return "Above buy zone";
-  if (relation === "at_buy_zone") return "At buy zone";
+function relationLabel(
+  relation: string | null | undefined,
+  isDonchian: boolean,
+): string {
+  if (relation === "below_buy_zone") {
+    return isDonchian ? "Below breakout" : "Below boundary";
+  }
+  if (relation === "above_buy_zone") {
+    return isDonchian ? "Above breakout" : "Above boundary";
+  }
+  if (relation === "at_buy_zone") {
+    return isDonchian ? "At breakout" : "At boundary";
+  }
   return "Unknown";
 }
 
 function relationShortLabel(relation: string | null | undefined): string {
-  if (relation === "below_buy_zone") return "below";
-  if (relation === "above_buy_zone") return "above";
-  if (relation === "at_buy_zone") return "at";
-  return "unknown";
+  if (relation === "below_buy_zone") return "Below";
+  if (relation === "above_buy_zone") return "Above";
+  if (relation === "at_buy_zone") return "At";
+  return "Unknown";
 }
 
 function relationClass(relation: string | null | undefined): string {
@@ -107,6 +121,20 @@ function humanReason(record: SignalRecord): string {
   return record.reason === "no_entry"
     ? "No fresh entry signal"
     : record.reason;
+}
+
+function fmtDistance(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "—";
+  const num = typeof value === "string" ? Number(value) : value;
+  if (!Number.isFinite(num)) return "—";
+  return num.toFixed(Math.abs(num) >= 10 ? 1 : 3);
+}
+
+function fmtAtrDistance(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "—";
+  const num = typeof value === "string" ? Number(value) : value;
+  if (!Number.isFinite(num)) return "—";
+  return num.toFixed(2);
 }
 
 const EQUITY_SOURCE_LABEL: Record<string, string> = {
@@ -284,15 +312,37 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
   const plan = latest?.trading_plan;
   const isBuy = latest?.signal_type === "BUY";
   const isDonchian = (latest?.strategy_id ?? "").includes("donchian");
-  const buyZoneLevel = state?.buy_zone_level ?? latest?.buy_zone_level;
-  const distanceToBuyZonePrice =
-    state?.distance_to_buy_zone_price ?? latest?.distance_to_buy_zone_price;
-  const distanceToBuyZoneAtr =
-    state?.distance_to_buy_zone_atr ?? latest?.distance_to_buy_zone_atr;
-  const distanceToBuyZonePct =
-    state?.distance_to_buy_zone_pct ?? latest?.distance_to_buy_zone_pct;
-  const buyZoneRelation =
-    state?.buy_zone_relation ?? latest?.buy_zone_relation;
+  const latestBoundaryDiagnostics = {
+    buy_zone_level: state?.buy_zone_level ?? latest?.buy_zone_level,
+    supertrend_value: state?.supertrend_value ?? latest?.supertrend_value,
+    donchian_high: state?.donchian_high,
+    close_price: snapshot?.close_price ?? latest?.close_price,
+    atr_value: snapshot?.atr_value ?? latest?.atr_value,
+    distance_to_buy_zone_price:
+      state?.distance_to_buy_zone_price ??
+      latest?.distance_to_buy_zone_price,
+    distance_to_buy_zone_atr:
+      state?.distance_to_buy_zone_atr ?? latest?.distance_to_buy_zone_atr,
+    distance_to_buy_zone_pct:
+      state?.distance_to_buy_zone_pct ?? latest?.distance_to_buy_zone_pct,
+    buy_zone_relation:
+      state?.buy_zone_relation ?? latest?.buy_zone_relation,
+  };
+  const buyZoneLevel = resolveReferenceBoundary(
+    latestBoundaryDiagnostics,
+    isDonchian,
+  );
+  const resolvedBuyZoneDistance = resolveBoundaryDistance(
+    latestBoundaryDiagnostics,
+    isDonchian,
+  );
+  const distanceToBuyZonePrice = resolvedBuyZoneDistance.price;
+  const distanceToBuyZoneAtr = resolvedBuyZoneDistance.atr;
+  const distanceToBuyZonePct = resolvedBuyZoneDistance.percent;
+  const buyZoneRelation = resolveBoundaryRelation(
+    latestBoundaryDiagnostics,
+    isDonchian,
+  );
   const nextBuyCondition =
     state?.next_buy_condition ??
     plan?.next_buy_condition ??
@@ -592,7 +642,7 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
                     <dt>
                       {isDonchian
                         ? "Donchian breakout level"
-                        : "SuperTrend reference boundary"}
+                        : "Current SuperTrend boundary"}
                     </dt>
                     <dd>{fmtCell(buyZoneLevel)}</dd>
                   </div>
@@ -624,7 +674,7 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
                     <dt>Relation</dt>
                     <dd>
                       <span className={relationClass(buyZoneRelation)}>
-                        {relationLabel(buyZoneRelation)}
+                        {relationLabel(buyZoneRelation, isDonchian)}
                       </span>
                     </dd>
                   </div>
@@ -737,7 +787,7 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
                         <dt>
                           {isDonchian
                             ? "Donchian breakout level"
-                            : "SuperTrend reference boundary"}
+                            : "Current SuperTrend boundary"}
                         </dt>
                         <dd>{fmtCell(buyZoneLevel)}</dd>
                       </div>
@@ -751,7 +801,7 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
                       </div>
                       <div>
                         <dt>Relation</dt>
-                        <dd>{relationLabel(buyZoneRelation)}</dd>
+                        <dd>{relationLabel(buyZoneRelation, isDonchian)}</dd>
                       </div>
                       {plan?.trailing_stop_reference != null ? (
                         <div>
@@ -792,41 +842,73 @@ export function MT5SignalBridgePanel({ buildConfigBody, disabled }: Props) {
                   <th>ATR</th>
                   <th>Regime</th>
                   <th>Signal</th>
-                  <th>Buy zone</th>
+                  <th>
+                    {isDonchian
+                      ? "Donchian breakout"
+                      : "SuperTrend boundary"}
+                  </th>
                   <th>Distance</th>
                   <th>Relation</th>
                   <th>Reason human</th>
                 </tr>
               </thead>
               <tbody>
-                {recentChecks.map((row) => (
-                  <tr key={row.signal_time}>
-                    <td>{fmtDateTime(row.signal_time)}</td>
-                    <td>{fmtCell(row.close_price)}</td>
-                    <td>{fmtCell(row.atr_value)}</td>
-                    <td>
-                      <span className={regimeClass(row.strategy_regime)}>
-                        {regimeLabel(row.strategy_regime, row.is_long_signal)}
-                      </span>
-                    </td>
-                    <td>
-                      <span className={signalClass(row.signal_type)}>
-                        {signalLabel(row.signal_type)}
-                      </span>
-                    </td>
-                    <td>{fmtCell(row.buy_zone_level)}</td>
-                    <td>
-                      {fmtCell(row.distance_to_buy_zone_price)} /{" "}
-                      {fmtCell(row.distance_to_buy_zone_atr)} ATR
-                    </td>
-                    <td>
-                      <span className={relationClass(row.buy_zone_relation)}>
-                        {relationShortLabel(row.buy_zone_relation)}
-                      </span>
-                    </td>
-                    <td className="slb-table-reason">{row.reason_human}</td>
-                  </tr>
-                ))}
+                {recentChecks.map((row) => {
+                  const rowBoundaryDiagnostics = {
+                    buy_zone_level: row.buy_zone_level,
+                    supertrend_value: row.supertrend_value,
+                    donchian_high: row.donchian_high,
+                    close_price: row.close_price,
+                    atr_value: row.atr_value,
+                    distance_to_buy_zone_price:
+                      row.distance_to_buy_zone_price,
+                    distance_to_buy_zone_atr:
+                      row.distance_to_buy_zone_atr,
+                    distance_to_buy_zone_pct:
+                      row.distance_to_buy_zone_pct,
+                    buy_zone_relation: row.buy_zone_relation,
+                  };
+                  const rowBoundary = resolveReferenceBoundary(
+                    rowBoundaryDiagnostics,
+                    isDonchian,
+                  );
+                  const rowRelation = resolveBoundaryRelation(
+                    rowBoundaryDiagnostics,
+                    isDonchian,
+                  );
+                  const rowDistance = resolveBoundaryDistance(
+                    rowBoundaryDiagnostics,
+                    isDonchian,
+                  );
+                  return (
+                    <tr key={row.signal_time}>
+                      <td>{fmtDateTime(row.signal_time)}</td>
+                      <td>{fmtCell(row.close_price)}</td>
+                      <td>{fmtCell(row.atr_value)}</td>
+                      <td>
+                        <span className={regimeClass(row.strategy_regime)}>
+                          {regimeLabel(row.strategy_regime, row.is_long_signal)}
+                        </span>
+                      </td>
+                      <td>
+                        <span className={signalClass(row.signal_type)}>
+                          {signalLabel(row.signal_type)}
+                        </span>
+                      </td>
+                      <td>{fmtCell(rowBoundary)}</td>
+                      <td>
+                        {fmtDistance(rowDistance.price)} /{" "}
+                        {fmtAtrDistance(rowDistance.atr)} ATR
+                      </td>
+                      <td>
+                        <span className={relationClass(rowRelation)}>
+                          {relationShortLabel(rowRelation)}
+                        </span>
+                      </td>
+                      <td className="slb-table-reason">{row.reason_human}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
