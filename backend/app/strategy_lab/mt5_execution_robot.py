@@ -88,10 +88,25 @@ REFUSE_EXECUTION_NOT_ENABLED: str = "execution_not_enabled"
 REFUSE_DEMO_ONLY_REQUIRED: str = "demo_only_flag_required"
 REFUSE_NOT_CONFIRMED: str = "demo_execution_not_confirmed"
 REFUSE_LOT_BELOW_MIN: str = "lot_below_minimum"
+REFUSE_LOT_ABOVE_MAX: str = "lot_above_maximum"
+REFUSE_MANUAL_LOT_REQUIRED: str = "manual_lot_required"
+REFUSE_MANUAL_RISK_TOO_HIGH: str = "manual_risk_too_high"
 REFUSE_MARGIN_INSUFFICIENT: str = "margin_insufficient"
 REFUSE_INVALID_SIZING: str = "invalid_lot_sizing"
 REFUSE_SEND_FAILED: str = "order_send_failed"
 REFUSE_LIVE_NOT_SUPPORTED: str = "live_execution_not_supported_in_v1_8"
+
+# v1.9 position sizing modes (long-only; demo-only safety gates are unchanged).
+SIZING_MODE_RISK_PERCENT_AUTO: str = "risk_percent_auto"
+SIZING_MODE_FIXED_LOT_MANUAL: str = "fixed_lot_manual"
+SIZING_MODE_RISK_PERCENT_WITH_MAX_LOT: str = "risk_percent_with_max_lot"
+SIZING_MODES: tuple[str, ...] = (
+    SIZING_MODE_RISK_PERCENT_AUTO,
+    SIZING_MODE_FIXED_LOT_MANUAL,
+    SIZING_MODE_RISK_PERCENT_WITH_MAX_LOT,
+)
+DEFAULT_EXECUTION_SIZING_MODE: str = SIZING_MODE_RISK_PERCENT_AUTO
+DEFAULT_MAX_MANUAL_RISK_PERCENT: float = 3.0
 
 # Notes (informational; never block on their own).
 NOTE_DUPLICATE: str = "duplicate_signal_time_already_processed"
@@ -101,8 +116,18 @@ NOTE_ONE_POSITION: str = "existing_position_one_position_only"
 # Sizing status values.
 SIZING_OK: str = "ok"
 SIZING_LOT_BELOW_MIN: str = "lot_below_min"
+SIZING_LOT_ABOVE_MAX: str = "lot_above_max"
+SIZING_MANUAL_LOT_REQUIRED: str = "manual_lot_required"
 SIZING_MARGIN_INSUFFICIENT: str = "margin_insufficient"
 SIZING_INVALID: str = "invalid_sizing"
+# Non-blocking-in-dry-run warning status: manual lot implies more risk than the
+# configured ceiling. Allowed in dry-run; refused in demo unless explicitly OK'd.
+SIZING_WARNING_MANUAL_RISK_TOO_HIGH: str = "warning_manual_risk_too_high"
+
+# Sizing warnings (informational; collected in sizing["sizing_warnings"]).
+WARN_MANUAL_LOT_ROUNDED: str = "manual_lot_rounded_to_symbol_step"
+WARN_MANUAL_RISK_HIGH: str = "manual_risk_exceeds_max_manual_risk_percent"
+WARN_CAPPED_BY_MAX_LOT: str = "lot_capped_by_max_lot"
 
 
 class ExecutionError(RuntimeError):
@@ -361,20 +386,46 @@ def compute_sizing(
     free_margin: Optional[float],
     required_margin: Optional[float],
     allow_min_lot_rounding: bool,
+    execution_sizing_mode: str = DEFAULT_EXECUTION_SIZING_MODE,
+    manual_lot: Optional[float] = None,
+    max_lot: Optional[float] = None,
+    max_manual_risk_percent: Optional[float] = DEFAULT_MAX_MANUAL_RISK_PERCENT,
+    allow_high_manual_risk: bool = False,
 ) -> dict:
-    """Compute a risk-percent lot and return full sizing diagnostics.
+    """Compute the executable lot and return full sizing diagnostics.
+
+    Supports three position-sizing modes (long-only; the demo-only safety gates
+    are unchanged and live elsewhere):
+
+        * ``risk_percent_auto`` -- the v1.8 behaviour: size from equity, the ATR
+          stop distance, contract size and the symbol volume constraints.
+        * ``fixed_lot_manual`` -- size from ``manual_lot`` (rounded down to the
+          symbol step). ``risk_percent`` is **not** used to size; the implied
+          risk is reported so the operator can see what the manual lot risks.
+        * ``risk_percent_with_max_lot`` -- size by risk percent, then cap the lot
+          at ``max_lot`` (rounded down to the symbol step).
 
     ``required_margin`` is supplied by the caller (via ``mt5.order_calc_margin``)
-    so this function stays pure and unit-testable. The returned
-    ``sizing_status`` is one of :data:`SIZING_OK`, :data:`SIZING_LOT_BELOW_MIN`,
-    :data:`SIZING_MARGIN_INSUFFICIENT` or :data:`SIZING_INVALID`.
+    so this function stays pure and unit-testable. The returned ``sizing_status``
+    is one of :data:`SIZING_OK`, :data:`SIZING_LOT_BELOW_MIN`,
+    :data:`SIZING_LOT_ABOVE_MAX`, :data:`SIZING_MANUAL_LOT_REQUIRED`,
+    :data:`SIZING_MARGIN_INSUFFICIENT`, :data:`SIZING_INVALID`, or the
+    dry-run-only warning :data:`SIZING_WARNING_MANUAL_RISK_TOO_HIGH`.
     """
     contract_size = spec.get("contract_size") or DEFAULT_CONTRACT_SIZE
     volume_min = spec.get("volume_min") or DEFAULT_VOLUME_STEP
     volume_max = spec.get("volume_max")
     volume_step = spec.get("volume_step") or DEFAULT_VOLUME_STEP
 
+    mode = (
+        execution_sizing_mode
+        if execution_sizing_mode in SIZING_MODES
+        else DEFAULT_EXECUTION_SIZING_MODE
+    )
+    warnings: list[str] = []
+
     diagnostics: dict = {
+        # --- shared / legacy fields (unchanged shape for risk_percent_auto) ---
         "equity": _clean_float(equity),
         "risk_percent": _clean_float(risk_percent),
         "risk_amount": None,
@@ -392,17 +443,30 @@ def compute_sizing(
         "free_margin": _clean_float(free_margin),
         "sizing_status": SIZING_INVALID,
         "increased_risk_due_to_min_lot": False,
+        # --- v1.9 sizing-mode additions ---
+        "execution_sizing_mode": mode,
+        "manual_lot_requested": _clean_float(manual_lot),
+        "max_lot": _clean_float(max_lot),
+        "auto_lot_before_cap": None,
+        "final_lot": None,
+        "capped_by_max_lot": False,
+        "implied_risk_amount": None,
+        "implied_risk_percent": None,
+        "final_risk_amount": None,
+        "final_risk_percent": None,
+        "max_manual_risk_percent": _clean_float(max_manual_risk_percent),
+        "allow_high_manual_risk": bool(allow_high_manual_risk),
+        "sizing_warnings": warnings,
     }
 
+    # The ATR stop distance is required for every mode (it defines risk_per_unit,
+    # the SL price and the implied risk of a manual lot).
     if (
-        equity is None
-        or risk_percent is None
-        or entry_price is None
+        entry_price is None
         or atr_value is None
         or initial_stop_loss_atr is None
         or atr_value <= 0
         or entry_price <= 0
-        or risk_percent <= 0
         or contract_size <= 0
     ):
         return diagnostics
@@ -411,32 +475,73 @@ def compute_sizing(
     risk_per_unit = entry_price - initial_stop_price
     diagnostics["initial_stop_price"] = _clean_float(initial_stop_price)
     diagnostics["risk_per_unit"] = _clean_float(risk_per_unit)
-
     if risk_per_unit <= 0:
         return diagnostics
 
-    risk_amount = equity * risk_percent / 100.0
-    raw_lot = risk_amount / (risk_per_unit * contract_size)
-    diagnostics["risk_amount"] = _clean_float(risk_amount)
-    diagnostics["raw_lot"] = _clean_float(raw_lot)
+    # --- pick a candidate lot per sizing mode --------------------------------
+    if mode == SIZING_MODE_FIXED_LOT_MANUAL:
+        if manual_lot is None or manual_lot <= 0:
+            diagnostics["sizing_status"] = SIZING_MANUAL_LOT_REQUIRED
+            return diagnostics
+        rounded_lot = round_down_to_step(manual_lot, volume_step)
+        if abs(rounded_lot - manual_lot) > 1e-9:
+            warnings.append(WARN_MANUAL_LOT_ROUNDED)
+        diagnostics["raw_lot"] = _clean_float(manual_lot)
+    else:
+        # Both auto modes need risk_percent + equity to size from risk.
+        if equity is None or risk_percent is None or risk_percent <= 0:
+            return diagnostics
+        risk_amount = equity * risk_percent / 100.0
+        raw_lot = risk_amount / (risk_per_unit * contract_size)
+        diagnostics["risk_amount"] = _clean_float(risk_amount)
+        diagnostics["raw_lot"] = _clean_float(raw_lot)
 
-    rounded_lot = round_down_to_step(raw_lot, volume_step)
-    if volume_max is not None and rounded_lot > volume_max:
-        rounded_lot = round_down_to_step(volume_max, volume_step)
+        rounded_lot = round_down_to_step(raw_lot, volume_step)
+        if volume_max is not None and rounded_lot > volume_max:
+            rounded_lot = round_down_to_step(volume_max, volume_step)
 
+        if mode == SIZING_MODE_RISK_PERCENT_WITH_MAX_LOT:
+            diagnostics["auto_lot_before_cap"] = _clean_float(rounded_lot)
+            if max_lot is not None and max_lot > 0 and rounded_lot > max_lot:
+                rounded_lot = round_down_to_step(max_lot, volume_step)
+                diagnostics["capped_by_max_lot"] = True
+                warnings.append(WARN_CAPPED_BY_MAX_LOT)
+
+    # --- volume_min / volume_max enforcement (shared across modes) -----------
     increased_risk = False
     status = SIZING_OK
-    if rounded_lot < volume_min:
-        if allow_min_lot_rounding:
+    if volume_max is not None and rounded_lot > volume_max:
+        status = SIZING_LOT_ABOVE_MAX
+    elif rounded_lot < volume_min:
+        if mode == SIZING_MODE_FIXED_LOT_MANUAL:
+            # A manual lot is never silently bumped up: refuse it instead.
+            status = SIZING_LOT_BELOW_MIN
+        elif allow_min_lot_rounding:
             rounded_lot = volume_min
             increased_risk = True
         else:
             status = SIZING_LOT_BELOW_MIN
 
     diagnostics["rounded_lot"] = _clean_float(rounded_lot)
+    diagnostics["final_lot"] = _clean_float(rounded_lot)
     diagnostics["increased_risk_due_to_min_lot"] = increased_risk
 
-    # Margin check only matters once we have a usable lot.
+    # --- risk implied by the resolved lot (reported for every mode) ----------
+    if rounded_lot and rounded_lot > 0:
+        effective_risk_amount = risk_per_unit * contract_size * rounded_lot
+        effective_risk_percent = (
+            effective_risk_amount / equity * 100.0
+            if (equity is not None and equity > 0)
+            else None
+        )
+        if mode == SIZING_MODE_FIXED_LOT_MANUAL:
+            diagnostics["implied_risk_amount"] = _clean_float(effective_risk_amount)
+            diagnostics["implied_risk_percent"] = _clean_float(effective_risk_percent)
+        else:
+            diagnostics["final_risk_amount"] = _clean_float(effective_risk_amount)
+            diagnostics["final_risk_percent"] = _clean_float(effective_risk_percent)
+
+    # --- margin check only matters once we have a usable lot -----------------
     if (
         status == SIZING_OK
         and required_margin is not None
@@ -444,6 +549,19 @@ def compute_sizing(
         and required_margin > free_margin
     ):
         status = SIZING_MARGIN_INSUFFICIENT
+
+    # --- high-manual-risk warning (fixed_lot_manual only) --------------------
+    # A non-blocking warning in dry-run; the demo gate (in _decide_entry) turns it
+    # into a refusal unless allow_high_manual_risk is set.
+    if status == SIZING_OK and mode == SIZING_MODE_FIXED_LOT_MANUAL:
+        implied_pct = diagnostics["implied_risk_percent"]
+        if (
+            implied_pct is not None
+            and max_manual_risk_percent is not None
+            and implied_pct > max_manual_risk_percent
+        ):
+            warnings.append(WARN_MANUAL_RISK_HIGH)
+            status = SIZING_WARNING_MANUAL_RISK_TOO_HIGH
 
     diagnostics["sizing_status"] = status
     return diagnostics
@@ -613,6 +731,20 @@ def empty_sizing() -> dict:
         "free_margin": None,
         "sizing_status": SIZING_INVALID,
         "increased_risk_due_to_min_lot": False,
+        # v1.9 sizing-mode fields (kept for a consistent decision shape).
+        "execution_sizing_mode": DEFAULT_EXECUTION_SIZING_MODE,
+        "manual_lot_requested": None,
+        "max_lot": None,
+        "auto_lot_before_cap": None,
+        "final_lot": None,
+        "capped_by_max_lot": False,
+        "implied_risk_amount": None,
+        "implied_risk_percent": None,
+        "final_risk_amount": None,
+        "final_risk_percent": None,
+        "max_manual_risk_percent": None,
+        "allow_high_manual_risk": False,
+        "sizing_warnings": [],
     }
 
 
@@ -759,6 +891,11 @@ def run_once(  # type: ignore[no-untyped-def]
     magic: int = DEFAULT_MAGIC,
     deviation: int = DEFAULT_DEVIATION,
     allow_min_lot_rounding: bool = False,
+    execution_sizing_mode: str = DEFAULT_EXECUTION_SIZING_MODE,
+    manual_lot: Optional[float] = None,
+    max_lot: Optional[float] = None,
+    max_manual_risk_percent: float = DEFAULT_MAX_MANUAL_RISK_PERCENT,
+    allow_high_manual_risk: bool = False,
     generated_at: Optional[datetime] = None,
 ) -> dict:
     """Run one execution decision and persist it through the store.
@@ -817,7 +954,7 @@ def run_once(  # type: ignore[no-untyped-def]
 
     # Sizing is computed for the open path even when no BUY fires, so the UI can
     # always show the diagnostics. We re-run the margin check with the real lot.
-    sizing = compute_sizing(
+    sizing_kwargs = dict(
         equity=account.get("equity"),
         risk_percent=risk_percent,
         entry_price=entry_price,
@@ -825,25 +962,23 @@ def run_once(  # type: ignore[no-untyped-def]
         initial_stop_loss_atr=initial_stop_loss_atr,
         spec=spec,
         free_margin=account.get("free_margin"),
-        required_margin=None,  # provisional; recomputed below with the lot
         allow_min_lot_rounding=allow_min_lot_rounding,
+        execution_sizing_mode=execution_sizing_mode,
+        manual_lot=manual_lot,
+        max_lot=max_lot,
+        max_manual_risk_percent=max_manual_risk_percent,
+        allow_high_manual_risk=allow_high_manual_risk,
+    )
+    sizing = compute_sizing(
+        required_margin=None,  # provisional; recomputed below with the lot
+        **sizing_kwargs,
     )
     rounded_lot = sizing.get("rounded_lot")
     if rounded_lot:
         required_margin = _estimate_required_margin(
             mt5, symbol=resolved_symbol, volume=rounded_lot, price=entry_price
         )
-        sizing = compute_sizing(
-            equity=account.get("equity"),
-            risk_percent=risk_percent,
-            entry_price=entry_price,
-            atr_value=atr_value,
-            initial_stop_loss_atr=initial_stop_loss_atr,
-            spec=spec,
-            free_margin=account.get("free_margin"),
-            required_margin=required_margin,
-            allow_min_lot_rounding=allow_min_lot_rounding,
-        )
+        sizing = compute_sizing(required_margin=required_margin, **sizing_kwargs)
 
     # --- determine effective mode + gates ---
     execution_requested = bool(execution_enabled)
@@ -919,6 +1054,7 @@ def run_once(  # type: ignore[no-untyped-def]
             deviation=deviation,
             magic=magic,
             spec=spec,
+            allow_high_manual_risk=allow_high_manual_risk,
             generated_at=generated_at,
         )
 
@@ -963,6 +1099,7 @@ def _decide_entry(  # type: ignore[no-untyped-def]
     deviation: int,
     magic: int,
     spec: dict,
+    allow_high_manual_risk: bool = False,
     generated_at: datetime,
 ) -> None:
     """No existing position: decide on a fresh BUY entry (long-only)."""
@@ -978,10 +1115,22 @@ def _decide_entry(  # type: ignore[no-untyped-def]
 
     # Sizing/margin must be valid before an open is possible.
     status = sizing.get("sizing_status")
-    if status != SIZING_OK:
+    if status == SIZING_WARNING_MANUAL_RISK_TOO_HIGH:
+        # A high implied manual risk is allowed in dry-run (so the operator can
+        # see it), but refused for demo execution unless explicitly acknowledged.
+        if mode == MODE_DEMO_EXECUTION and not allow_high_manual_risk:
+            decision["intended_action"] = ACTION_REFUSED
+            decision["refusal_reasons"].append(REFUSE_MANUAL_RISK_TOO_HIGH)
+            return
+        # Otherwise fall through and treat sizing as usable.
+    elif status != SIZING_OK:
         decision["intended_action"] = ACTION_REFUSED
         if status == SIZING_LOT_BELOW_MIN:
             decision["refusal_reasons"].append(REFUSE_LOT_BELOW_MIN)
+        elif status == SIZING_LOT_ABOVE_MAX:
+            decision["refusal_reasons"].append(REFUSE_LOT_ABOVE_MAX)
+        elif status == SIZING_MANUAL_LOT_REQUIRED:
+            decision["refusal_reasons"].append(REFUSE_MANUAL_LOT_REQUIRED)
         elif status == SIZING_MARGIN_INSUFFICIENT:
             decision["refusal_reasons"].append(REFUSE_MARGIN_INSUFFICIENT)
         else:

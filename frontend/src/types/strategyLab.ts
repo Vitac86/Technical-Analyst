@@ -426,6 +426,19 @@ export interface ExecutionMarket {
   atr: number | null;
 }
 
+/** v1.9 position sizing modes (long-only; demo-only safety gates unchanged). */
+export type ExecutionSizingMode =
+  | "risk_percent_auto"
+  | "fixed_lot_manual"
+  | "risk_percent_with_max_lot";
+
+/** Manual-risk warning string emitted in sizing.sizing_warnings. */
+export const WARN_MANUAL_RISK_HIGH = "manual_risk_exceeds_max_manual_risk_percent";
+export const WARN_MANUAL_LOT_ROUNDED = "manual_lot_rounded_to_symbol_step";
+export const WARN_CAPPED_BY_MAX_LOT = "lot_capped_by_max_lot";
+/** sizing_status when a manual lot implies more than the configured ceiling. */
+export const SIZING_WARNING_MANUAL_RISK_TOO_HIGH = "warning_manual_risk_too_high";
+
 export interface ExecutionSizing {
   equity: number | null;
   risk_percent: number | null;
@@ -442,8 +455,24 @@ export interface ExecutionSizing {
   volume_step: number | null;
   required_margin: number | null;
   free_margin: number | null;
-  sizing_status: string; // ok | lot_below_min | margin_insufficient | invalid_sizing
+  // ok | lot_below_min | lot_above_max | manual_lot_required |
+  // margin_insufficient | invalid_sizing | warning_manual_risk_too_high
+  sizing_status: string;
   increased_risk_due_to_min_lot: boolean;
+  // v1.9 sizing-mode fields
+  execution_sizing_mode: ExecutionSizingMode;
+  manual_lot_requested: number | null;
+  max_lot: number | null;
+  auto_lot_before_cap: number | null;
+  final_lot: number | null;
+  capped_by_max_lot: boolean;
+  implied_risk_amount: number | null;
+  implied_risk_percent: number | null;
+  final_risk_amount: number | null;
+  final_risk_percent: number | null;
+  max_manual_risk_percent: number | null;
+  allow_high_manual_risk: boolean;
+  sizing_warnings: string[];
 }
 
 export interface ExecutionPositionState {

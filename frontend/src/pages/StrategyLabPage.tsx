@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { exportConfig, getPresets, runBacktest } from "../api/strategyLab";
-import { CostScenarioSelector } from "../components/strategyLab/CostScenarioSelector";
-import { MetricCards } from "../components/strategyLab/MetricCards";
-import { MT5ExecutionRobotPanel } from "../components/strategyLab/MT5ExecutionRobotPanel";
-import { MT5SignalBridgePanel } from "../components/strategyLab/MT5SignalBridgePanel";
-import { ParameterPanel } from "../components/strategyLab/ParameterPanel";
-import { PeriodTables } from "../components/strategyLab/PeriodTables";
-import { PresetSelector } from "../components/strategyLab/PresetSelector";
-import { StrategyChart } from "../components/strategyLab/StrategyChart";
-import { TradesTable } from "../components/strategyLab/TradesTable";
+import { BacktestPanel } from "../components/strategyLab/BacktestPanel";
+import { DemoRobotPanel } from "../components/strategyLab/DemoRobotPanel";
+import { ResearchNotesPanel } from "../components/strategyLab/ResearchNotesPanel";
+import { SignalsPanel } from "../components/strategyLab/SignalsPanel";
+import {
+  StrategyLabTabs,
+  type StrategyLabTab,
+  type StrategyLabTabId,
+} from "../components/strategyLab/StrategyLabTabs";
+import { TradingMonitorPanel } from "../components/strategyLab/TradingMonitorPanel";
 import type {
   BacktestRequest,
   BacktestResponse,
@@ -18,6 +19,14 @@ import type {
   Preset,
   PresetsResponse,
 } from "../types/strategyLab";
+
+const TABS: StrategyLabTab[] = [
+  { id: "monitor", label: "Trading Monitor" },
+  { id: "backtest", label: "Backtest" },
+  { id: "signals", label: "Signals" },
+  { id: "robot", label: "Demo Robot" },
+  { id: "research", label: "Research Notes" },
+];
 
 const DEFAULT_CUSTOM_COSTS: CustomCosts = {
   fixed_spread_points: 30,
@@ -47,6 +56,8 @@ export function StrategyLabPage() {
   const [runError, setRunError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+
+  const [activeTab, setActiveTab] = useState<StrategyLabTabId>("monitor");
 
   const autoRan = useRef(false);
 
@@ -154,33 +165,6 @@ export function StrategyLabPage() {
     }
   }
 
-  const equitySeries = useMemo(
-    () => [
-      {
-        data: (result?.equity_curve ?? []).map((p) => ({ t: p.t, value: p.equity })),
-        lineColor: "#56ccf2",
-        topColor: "rgba(86, 204, 242, 0.35)",
-        bottomColor: "rgba(86, 204, 242, 0.02)",
-      },
-    ],
-    [result],
-  );
-
-  const drawdownSeries = useMemo(
-    () => [
-      {
-        data: (result?.drawdown_series ?? []).map((p) => ({
-          t: p.t,
-          value: p.drawdown_pct === null ? null : -p.drawdown_pct,
-        })),
-        lineColor: "#eb5757",
-        topColor: "rgba(235, 87, 87, 0.05)",
-        bottomColor: "rgba(235, 87, 87, 0.35)",
-      },
-    ],
-    [result],
-  );
-
   if (presetsError) {
     return (
       <div className="page-content">
@@ -206,169 +190,62 @@ export function StrategyLabPage() {
         </p>
       </div>
 
-      {/* Disclaimers */}
-      <div className="sl-disclaimer">
-        <strong>Research &amp; backtesting only.</strong> {presetsData.disclaimer}
-      </div>
-      <div className="sl-ml-note">ℹ️ {presetsData.ml_note}</div>
-
-      {/* A. Preset selector */}
-      <PresetSelector
-        presets={presetsData.presets}
-        selectedId={selectedId}
-        onSelect={handleSelectPreset}
-        disabled={running}
-      />
-
-      {/* Preset guidance */}
-      <div className="sl-guidance">
-        <p className="sl-guidance-use">
-          <span className="sl-tag sl-tag-status">{selectedPreset.research_status}</span>{" "}
-          {selectedPreset.recommended_use}
-        </p>
-        {selectedPreset.warning_notes.length > 0 ? (
-          <ul className="sl-warnings">
-            {selectedPreset.warning_notes.map((note) => (
-              <li key={note}>{note}</li>
-            ))}
-          </ul>
-        ) : null}
+      {/* Single compact warning strip (full disclaimers live in Research Notes). */}
+      <div className="sl-warning-strip">
+        Research/backtesting and demo-only execution. Live trading is disabled.
       </div>
 
-      {/* B + C. Controls */}
-      <div className="sl-controls">
-        <ParameterPanel
-          preset={selectedPreset}
-          values={params}
-          onChange={handleParamChange}
-          onReset={handleResetParams}
-          disabled={running}
-        />
+      <StrategyLabTabs tabs={TABS} active={activeTab} onChange={setActiveTab} />
 
-        <div className="sl-controls-side">
-          <CostScenarioSelector
-            scenario={costScenario}
-            onScenario={setCostScenario}
-            customCosts={customCosts}
-            onCustomChange={(key, value) =>
-              setCustomCosts((prev) => ({ ...prev, [key]: value }))
-            }
-            catalogue={presetsData.cost_scenarios}
-            disabled={running}
-          />
-
-          <div className="sl-date-row">
-            <label className="sl-field">
-              <span className="sl-field-label">From (optional)</span>
-              <input
-                type="date"
-                className="sl-input"
-                value={startDate}
-                disabled={running}
-                onChange={(e) => setStartDate(e.target.value)}
-              />
-            </label>
-            <label className="sl-field">
-              <span className="sl-field-label">To (optional)</span>
-              <input
-                type="date"
-                className="sl-input"
-                value={endDate}
-                disabled={running}
-                onChange={(e) => setEndDate(e.target.value)}
-              />
-            </label>
-          </div>
-
-          {/* D + J. Actions */}
-          <div className="sl-actions">
-            <button className="btn btn-primary" onClick={handleRun} disabled={running}>
-              {running ? "Running…" : "Run backtest"}
-            </button>
-            <button
-              className="btn btn-secondary"
-              onClick={handleExport}
-              disabled={running || exporting}
-              title="Download this configuration as JSON for a later MT5 robot / signal bridge"
-            >
-              {exporting ? "Exporting…" : "Export config (JSON)"}
-            </button>
-          </div>
-          {exportError ? (
-            <div className="chart-state chart-state-error">{exportError}</div>
-          ) : null}
-        </div>
-      </div>
-
-      {/* Run error */}
-      {runError ? <div className="chart-state chart-state-error">{runError}</div> : null}
-
-      {/* Results */}
-      {result ? (
-        <div className="sl-results">
-          <div className="sl-results-head">
-            <span className="sl-results-meta">
-              {result.display_name} · {result.symbol} {result.timeframe} ·{" "}
-              {result.cost_scenario} costs ·{" "}
-              {result.data_range.start?.slice(0, 10) ?? "—"} →{" "}
-              {result.data_range.end?.slice(0, 10) ?? "—"} ({result.data_range.bars} bars)
-            </span>
-          </div>
-
-          {result.warnings.length > 0 ? (
-            <div className="chart-state chart-state-warn">
-              {result.warnings.join(" ")}
-            </div>
-          ) : null}
-
-          {/* E. Summary metric cards */}
-          <MetricCards metrics={result.summary} />
-
-          {/* F + G. Charts */}
-          <div className="sl-charts">
-            <StrategyChart
-              title="Equity curve"
-              series={equitySeries}
-              precision={0}
-              emptyMessage="No equity data."
-            />
-            <StrategyChart
-              title="Drawdown (% below peak)"
-              series={drawdownSeries}
-              precision={1}
-              emptyMessage="No drawdown data."
-            />
-          </div>
-
-          {/* I. Yearly / walk-forward */}
-          <PeriodTables
-            yearly={result.yearly_summary}
-            walkForward={result.walk_forward_summary}
-          />
-
-          {/* H. Trades */}
-          <section className="panel sl-trades-panel">
-            <div className="panel-header">
-              <h2>Trades</h2>
-            </div>
-            <TradesTable
-              trades={result.trades}
-              total={result.trades_total}
-              truncated={result.trades_truncated}
-            />
-          </section>
-
-          <p className="ts-disclaimer">
-            {result.research_disclaimer} ML filter disabled by default.
-          </p>
-        </div>
+      {activeTab === "monitor" ? (
+        <TradingMonitorPanel buildConfigBody={buildConfigBody} disabled={running} />
       ) : null}
 
-      {/* K. MT5 signal-only bridge control (v1.7.1) */}
-      <MT5SignalBridgePanel buildConfigBody={buildConfigBody} disabled={running} />
+      {activeTab === "backtest" ? (
+        <BacktestPanel
+          presets={presetsData.presets}
+          costScenarios={presetsData.cost_scenarios}
+          selectedId={selectedId}
+          selectedPreset={selectedPreset}
+          params={params}
+          costScenario={costScenario}
+          customCosts={customCosts}
+          startDate={startDate}
+          endDate={endDate}
+          result={result}
+          running={running}
+          runError={runError}
+          exporting={exporting}
+          exportError={exportError}
+          onSelectPreset={handleSelectPreset}
+          onParamChange={handleParamChange}
+          onResetParams={handleResetParams}
+          onCostScenario={setCostScenario}
+          onCustomChange={(key, value) =>
+            setCustomCosts((prev) => ({ ...prev, [key]: value }))
+          }
+          onStartDate={setStartDate}
+          onEndDate={setEndDate}
+          onRun={handleRun}
+          onExport={handleExport}
+        />
+      ) : null}
 
-      {/* L. MT5 demo execution robot (v1.8) — separate, demo-only, dry-run default */}
-      <MT5ExecutionRobotPanel buildConfigBody={buildConfigBody} disabled={running} />
+      {activeTab === "signals" ? (
+        <SignalsPanel buildConfigBody={buildConfigBody} disabled={running} />
+      ) : null}
+
+      {activeTab === "robot" ? (
+        <DemoRobotPanel buildConfigBody={buildConfigBody} disabled={running} />
+      ) : null}
+
+      {activeTab === "research" ? (
+        <ResearchNotesPanel
+          presets={presetsData.presets}
+          disclaimer={presetsData.disclaimer}
+          mlNote={presetsData.ml_note}
+        />
+      ) : null}
     </div>
   );
 }

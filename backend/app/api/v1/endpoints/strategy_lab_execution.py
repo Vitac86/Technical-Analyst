@@ -38,6 +38,17 @@ def _client_error(message: str) -> HTTPException:
     return HTTPException(status_code=422, detail=message)
 
 
+def _sizing_kwargs(body) -> dict:  # type: ignore[no-untyped-def]
+    """Extract the v1.9 position-sizing controls from a request body."""
+    return {
+        "execution_sizing_mode": body.execution_sizing_mode,
+        "manual_lot": body.manual_lot,
+        "max_lot": body.max_lot,
+        "max_manual_risk_percent": body.max_manual_risk_percent,
+        "allow_high_manual_risk": body.allow_high_manual_risk,
+    }
+
+
 def _resolve_or_refuse(
     config: dict | None, config_path: str | None
 ) -> tuple[dict | None, dict | None]:
@@ -100,6 +111,7 @@ def dry_run_once(body: ExecutionDryRunRequest) -> dict:
             magic=body.magic,
             deviation=body.deviation,
             allow_min_lot_rounding=body.allow_min_lot_rounding,
+            **_sizing_kwargs(body),
         )
     except (bridge.BridgeError, robot.ExecutionError) as exc:
         # MT5 operational issue: surface as a refusal card, not an HTTP error.
@@ -123,6 +135,7 @@ def demo_execution_once(body: ExecutionDemoOnceRequest) -> dict:
             magic=body.magic,
             deviation=body.deviation,
             allow_min_lot_rounding=body.allow_min_lot_rounding,
+            **_sizing_kwargs(body),
         )
     except (bridge.BridgeError, robot.ExecutionError) as exc:
         return robot.manual_refusal_decision(
@@ -146,6 +159,7 @@ def start_execution_robot(body: StartExecutionRequest) -> dict:
             demo_execution_enabled=body.demo_execution_enabled,
             confirm_demo_execution=body.confirm_demo_execution,
             allow_min_lot_rounding=body.allow_min_lot_rounding,
+            **_sizing_kwargs(body),
         )
     except robot.ExecutionError as exc:
         raise _client_error(str(exc)) from exc

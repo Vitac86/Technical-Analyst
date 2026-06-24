@@ -134,6 +134,11 @@ def _run_once_with_mt5(
     magic: int,
     deviation: int,
     allow_min_lot_rounding: bool,
+    execution_sizing_mode: str = robot.DEFAULT_EXECUTION_SIZING_MODE,
+    manual_lot: Optional[float] = None,
+    max_lot: Optional[float] = None,
+    max_manual_risk_percent: float = robot.DEFAULT_MAX_MANUAL_RISK_PERCENT,
+    allow_high_manual_risk: bool = False,
     mt5_loader: Optional[Mt5Loader],
     store: Optional[ExecutionStore],
 ) -> dict:
@@ -153,6 +158,11 @@ def _run_once_with_mt5(
             magic=magic,
             deviation=deviation,
             allow_min_lot_rounding=allow_min_lot_rounding,
+            execution_sizing_mode=execution_sizing_mode,
+            manual_lot=manual_lot,
+            max_lot=max_lot,
+            max_manual_risk_percent=max_manual_risk_percent,
+            allow_high_manual_risk=allow_high_manual_risk,
             generated_at=datetime.now(timezone.utc),
         )
     finally:
@@ -166,6 +176,11 @@ def run_dry_run_once(
     magic: int = robot.DEFAULT_MAGIC,
     deviation: int = robot.DEFAULT_DEVIATION,
     allow_min_lot_rounding: bool = False,
+    execution_sizing_mode: str = robot.DEFAULT_EXECUTION_SIZING_MODE,
+    manual_lot: Optional[float] = None,
+    max_lot: Optional[float] = None,
+    max_manual_risk_percent: float = robot.DEFAULT_MAX_MANUAL_RISK_PERCENT,
+    allow_high_manual_risk: bool = False,
     mt5_loader: Optional[Mt5Loader] = None,
     store: Optional[ExecutionStore] = None,
 ) -> dict:
@@ -179,6 +194,11 @@ def run_dry_run_once(
         magic=magic,
         deviation=deviation,
         allow_min_lot_rounding=allow_min_lot_rounding,
+        execution_sizing_mode=execution_sizing_mode,
+        manual_lot=manual_lot,
+        max_lot=max_lot,
+        max_manual_risk_percent=max_manual_risk_percent,
+        allow_high_manual_risk=allow_high_manual_risk,
         mt5_loader=mt5_loader,
         store=store,
     )
@@ -192,6 +212,11 @@ def run_demo_once(
     magic: int = robot.DEFAULT_MAGIC,
     deviation: int = robot.DEFAULT_DEVIATION,
     allow_min_lot_rounding: bool = False,
+    execution_sizing_mode: str = robot.DEFAULT_EXECUTION_SIZING_MODE,
+    manual_lot: Optional[float] = None,
+    max_lot: Optional[float] = None,
+    max_manual_risk_percent: float = robot.DEFAULT_MAX_MANUAL_RISK_PERCENT,
+    allow_high_manual_risk: bool = False,
     mt5_loader: Optional[Mt5Loader] = None,
     store: Optional[ExecutionStore] = None,
 ) -> dict:
@@ -221,6 +246,11 @@ def run_demo_once(
         magic=magic,
         deviation=deviation,
         allow_min_lot_rounding=allow_min_lot_rounding,
+        execution_sizing_mode=execution_sizing_mode,
+        manual_lot=manual_lot,
+        max_lot=max_lot,
+        max_manual_risk_percent=max_manual_risk_percent,
+        allow_high_manual_risk=allow_high_manual_risk,
         mt5_loader=mt5_loader,
         store=store,
     )
@@ -298,13 +328,36 @@ def start_polling(
     demo_execution_enabled: bool = False,
     confirm_demo_execution: bool = False,
     allow_min_lot_rounding: bool = False,
+    execution_sizing_mode: str = robot.DEFAULT_EXECUTION_SIZING_MODE,
+    manual_lot: Optional[float] = None,
+    max_lot: Optional[float] = None,
+    max_manual_risk_percent: float = robot.DEFAULT_MAX_MANUAL_RISK_PERCENT,
+    allow_high_manual_risk: bool = False,
 ) -> dict:
     """Start the polling robot subprocess, refusing a duplicate or unconfirmed run.
 
     Polling runs in dry-run mode unless ``demo_execution_enabled`` **and**
     ``confirm_demo_execution`` are both true. A demo-execution request without
-    confirmation is refused here (no process is started).
+    confirmation is refused here (no process is started). The position sizing
+    mode (and its manual_lot / max_lot / manual-risk knobs) is forwarded to the
+    polling subprocess so it sizes exactly like the one-shot path.
     """
+    if execution_sizing_mode not in robot.SIZING_MODES:
+        return {
+            **process_status(),
+            "started": False,
+            "message": f"Unknown execution_sizing_mode '{execution_sizing_mode}'.",
+        }
+    if (
+        execution_sizing_mode == robot.SIZING_MODE_FIXED_LOT_MANUAL
+        and (manual_lot is None or manual_lot <= 0)
+    ):
+        return {
+            **process_status(),
+            "started": False,
+            "message": "fixed_lot_manual requires a positive manual_lot.",
+        }
+
     if demo_execution_enabled and not confirm_demo_execution:
         return {
             **process_status(),
@@ -347,6 +400,18 @@ def start_polling(
     ]
     if allow_min_lot_rounding:
         command.append("--allow-min-lot-rounding")
+    command += [
+        "--execution-sizing-mode",
+        str(execution_sizing_mode),
+        "--max-manual-risk-percent",
+        str(float(max_manual_risk_percent)),
+    ]
+    if manual_lot is not None:
+        command += ["--manual-lot", str(float(manual_lot))]
+    if max_lot is not None:
+        command += ["--max-lot", str(float(max_lot))]
+    if allow_high_manual_risk:
+        command.append("--allow-high-manual-risk")
     if mode == robot.MODE_DEMO_EXECUTION:
         command += ["--execution-enabled", "--confirm-demo-execution"]
 
@@ -371,6 +436,11 @@ def start_polling(
         "magic": int(magic),
         "deviation": int(deviation),
         "allow_min_lot_rounding": bool(allow_min_lot_rounding),
+        "execution_sizing_mode": str(execution_sizing_mode),
+        "manual_lot": float(manual_lot) if manual_lot is not None else None,
+        "max_lot": float(max_lot) if max_lot is not None else None,
+        "max_manual_risk_percent": float(max_manual_risk_percent),
+        "allow_high_manual_risk": bool(allow_high_manual_risk),
         "status": "running",
     }
     _write_process_state(state)

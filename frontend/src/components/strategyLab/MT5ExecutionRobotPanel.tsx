@@ -21,12 +21,16 @@ import type {
   ExecutionStatus,
 } from "../../types/strategyLab";
 import { fmtDateTime } from "./format";
+import { PositionSizingControls } from "./PositionSizingControls";
+import { decisionFlagsHighManualRisk, usePositionSizing } from "./usePositionSizing";
 
 interface Props {
   /** Build the current Strategy Lab config request (preset + overrides + costs). */
   buildConfigBody: () => BacktestRequest;
   /** Disabled while a backtest is running on the page. */
   disabled?: boolean;
+  /** Start expanded (used by the dedicated Demo Robot tab). Default collapsed. */
+  defaultOpen?: boolean;
 }
 
 function fmtCell(value: number | string | null | undefined): string {
@@ -77,6 +81,10 @@ const REFUSAL_LABEL: Record<string, string> = {
   demo_only_flag_required: "Demo-only safety flag is required.",
   demo_execution_not_confirmed: "Demo execution was not confirmed.",
   lot_below_minimum: "Computed lot is below the symbol minimum.",
+  lot_above_maximum: "Lot is above the symbol maximum.",
+  manual_lot_required: "A positive manual lot is required for fixed_lot_manual.",
+  manual_risk_too_high:
+    "Manual lot implies more risk than the ceiling; allow high manual risk to proceed.",
   margin_insufficient: "Free margin is insufficient for the computed lot.",
   invalid_lot_sizing: "Lot sizing could not be computed (missing inputs).",
   order_send_failed: "MT5 rejected the order (see order result).",
@@ -86,6 +94,20 @@ const REFUSAL_LABEL: Record<string, string> = {
 function refusalText(reason: string): string {
   return REFUSAL_LABEL[reason] ?? reason;
 }
+
+// v1.9 sizing labels (demo-only wording; never "live").
+const SIZING_MODE_LABEL: Record<string, string> = {
+  risk_percent_auto: "Auto risk %",
+  fixed_lot_manual: "Manual lot",
+  risk_percent_with_max_lot: "Auto risk % + max lot",
+};
+
+const SIZING_WARNING_LABEL: Record<string, string> = {
+  manual_lot_rounded_to_symbol_step: "Manual lot was rounded down to the symbol step.",
+  manual_risk_exceeds_max_manual_risk_percent:
+    "Manual lot implies more than the configured risk ceiling.",
+  lot_capped_by_max_lot: "Auto lot was capped by the max lot.",
+};
 
 /** A safety badge for the checklist. */
 function Badge({ ok, label }: { ok: boolean | null; label: string }) {
@@ -103,8 +125,12 @@ function Badge({ ok, label }: { ok: boolean | null; label: string }) {
   );
 }
 
-export function MT5ExecutionRobotPanel({ buildConfigBody, disabled }: Props) {
-  const [open, setOpen] = useState(false); // collapsed by default
+export function MT5ExecutionRobotPanel({
+  buildConfigBody,
+  disabled,
+  defaultOpen = false,
+}: Props) {
+  const [open, setOpen] = useState(defaultOpen); // collapsed by default
 
   const [configs, setConfigs] = useState<ExecutionSavedConfig[]>([]);
   const [selectedPath, setSelectedPath] = useState<string>("");
@@ -113,6 +139,9 @@ export function MT5ExecutionRobotPanel({ buildConfigBody, disabled }: Props) {
 
   const [pollSeconds, setPollSeconds] = useState(60);
   const [allowMinLot, setAllowMinLot] = useState(false);
+
+  // v1.9 position sizing (mode + manual lot / max lot / manual-risk controls).
+  const sizing = usePositionSizing();
 
   // Two explicit confirmations are required to arm demo execution.
   const [ackOrders, setAckOrders] = useState(false);
@@ -133,7 +162,14 @@ export function MT5ExecutionRobotPanel({ buildConfigBody, disabled }: Props) {
   const selectedSupported = selected?.is_supported ?? false;
   const hasConfig = Boolean(selectedPath) && selectedSupported;
   const actionsDisabled = disabled || busy;
-  const demoArmed = ackOrders && ackDemo;
+  // Dry-run requires a syntactically valid sizing input (e.g. a positive manual lot).
+  const dryRunReady = hasConfig && sizing.valid;
+  // Demo execution additionally needs both confirmations and is blocked while a
+  // high implied manual risk is unacknowledged.
+  const demoBlockedByRisk =
+    decisionFlagsHighManualRisk(decision?.sizing) && !sizing.allowHighManualRisk;
+  const demoConfirmed = ackOrders && ackDemo;
+  const demoArmed = demoConfirmed && sizing.valid && !demoBlockedByRisk;
 
   const refreshConfigs = useCallback(async () => {
     const data = await listExecutionConfigs();
@@ -210,6 +246,7 @@ export function MT5ExecutionRobotPanel({ buildConfigBody, disabled }: Props) {
     guard("Dry-run", async () => {
       const result = await executionDryRunOnce(selectedPath, {
         allowMinLotRounding: allowMinLot,
+        ...sizing.options,
       });
       setDecision(result);
       await refreshHistory();
@@ -217,8 +254,9 @@ export function MT5ExecutionRobotPanel({ buildConfigBody, disabled }: Props) {
 
   const handleDemoOnce = () =>
     guard("Demo execution", async () => {
-      const result = await executionDemoOnce(selectedPath, demoArmed, {
+      const result = await executionDemoOnce(selectedPath, demoConfirmed, {
         allowMinLotRounding: allowMinLot,
+        ...sizing.options,
       });
       setDecision(result);
       await refreshHistory();
@@ -231,6 +269,7 @@ export function MT5ExecutionRobotPanel({ buildConfigBody, disabled }: Props) {
         configPath: selectedPath,
         pollSeconds,
         allowMinLotRounding: allowMinLot,
+        ...sizing.options,
       });
       setStatus(result);
       if (result.message && result.started === false) setSavedNote(result.message);
@@ -242,8 +281,9 @@ export function MT5ExecutionRobotPanel({ buildConfigBody, disabled }: Props) {
         configPath: selectedPath,
         pollSeconds,
         demoExecutionEnabled: true,
-        confirmDemoExecution: demoArmed,
+        confirmDemoExecution: demoConfirmed,
         allowMinLotRounding: allowMinLot,
+        ...sizing.options,
       });
       setStatus(result);
       if (result.message && result.started === false) setSavedNote(result.message);
@@ -264,7 +304,7 @@ export function MT5ExecutionRobotPanel({ buildConfigBody, disabled }: Props) {
 
   // Derived views of the latest decision.
   const account = decision?.account;
-  const sizing = decision?.sizing;
+  const decisionSizing = decision?.sizing;
   const position = decision?.position_state;
   const order = decision?.order_result;
   const trailing = decision?.trailing;
@@ -394,6 +434,16 @@ export function MT5ExecutionRobotPanel({ buildConfigBody, disabled }: Props) {
             </p>
           </div>
 
+          {/* C0. Position sizing (v1.9) */}
+          <div className="slb-section">
+            <PositionSizingControls
+              sizing={sizing}
+              configRiskPercent={decision?.sizing?.risk_percent ?? null}
+              decisionSizing={decision?.sizing ?? null}
+              disabled={actionsDisabled}
+            />
+          </div>
+
           {/* C. Dry-run */}
           <div className="slb-section">
             <h3 className="slb-section-title">Dry-run</h3>
@@ -405,7 +455,7 @@ export function MT5ExecutionRobotPanel({ buildConfigBody, disabled }: Props) {
               <button
                 className="btn btn-secondary"
                 onClick={handleDryRun}
-                disabled={actionsDisabled || !hasConfig}
+                disabled={actionsDisabled || !dryRunReady}
               >
                 Dry-run once
               </button>
@@ -447,6 +497,14 @@ export function MT5ExecutionRobotPanel({ buildConfigBody, disabled }: Props) {
               I confirm the connected account is a demo account.
             </label>
 
+            {demoBlockedByRisk ? (
+              <p className="chart-state chart-state-warn erp-risk-block">
+                The last dry-run implied more than the manual-risk ceiling. Tick
+                “Allow high manual risk” in Position sizing to enable demo
+                execution, or lower the manual lot.
+              </p>
+            ) : null}
+
             <div className="slb-row erp-demo-actions">
               <button
                 className="btn btn-danger"
@@ -455,7 +513,7 @@ export function MT5ExecutionRobotPanel({ buildConfigBody, disabled }: Props) {
                 title={
                   demoArmed
                     ? "Run one demo execution decision"
-                    : "Tick both confirmations to enable"
+                    : "Tick both confirmations (and resolve any sizing warning) to enable"
                 }
               >
                 Demo execution once
@@ -478,7 +536,7 @@ export function MT5ExecutionRobotPanel({ buildConfigBody, disabled }: Props) {
               <button
                 className="btn btn-primary"
                 onClick={handleStartDryRun}
-                disabled={actionsDisabled || !hasConfig || running}
+                disabled={actionsDisabled || !dryRunReady || running}
               >
                 Start dry-run polling
               </button>
@@ -529,6 +587,12 @@ export function MT5ExecutionRobotPanel({ buildConfigBody, disabled }: Props) {
                   <span className="erp-mode-chip">
                     {MODE_LABEL[decision.mode] ?? decision.mode}
                   </span>
+                  {decisionSizing?.execution_sizing_mode ? (
+                    <span className="erp-mode-chip erp-sizing-chip">
+                      {SIZING_MODE_LABEL[decisionSizing.execution_sizing_mode] ??
+                        decisionSizing.execution_sizing_mode}
+                    </span>
+                  ) : null}
                   <span className="erp-decision-time">
                     {fmtDateTime(decision.generated_at)}
                   </span>
@@ -538,6 +602,14 @@ export function MT5ExecutionRobotPanel({ buildConfigBody, disabled }: Props) {
                   <ul className="erp-refusals">
                     {decision.refusal_reasons.map((r) => (
                       <li key={r}>{refusalText(r)}</li>
+                    ))}
+                  </ul>
+                ) : null}
+
+                {(decisionSizing?.sizing_warnings ?? []).length > 0 ? (
+                  <ul className="erp-refusals erp-sizing-warnings">
+                    {(decisionSizing?.sizing_warnings ?? []).map((w) => (
+                      <li key={w}>{SIZING_WARNING_LABEL[w] ?? w}</li>
                     ))}
                   </ul>
                 ) : null}
@@ -566,32 +638,50 @@ export function MT5ExecutionRobotPanel({ buildConfigBody, disabled }: Props) {
                   </div>
                   <div>
                     <dt>Entry price (ask)</dt>
-                    <dd>{fmtCell(sizing?.entry_price)}</dd>
+                    <dd>{fmtCell(decisionSizing?.entry_price)}</dd>
                   </div>
                   <div>
                     <dt>Initial SL</dt>
-                    <dd>{fmtCell(sizing?.initial_stop_price)}</dd>
+                    <dd>{fmtCell(decisionSizing?.initial_stop_price)}</dd>
                   </div>
                   <div>
-                    <dt>Lot</dt>
+                    <dt>Final lot</dt>
                     <dd>
-                      {fmtLot(sizing?.rounded_lot)}
-                      {sizing?.increased_risk_due_to_min_lot
+                      {fmtLot(decisionSizing?.final_lot ?? decisionSizing?.rounded_lot)}
+                      {decisionSizing?.increased_risk_due_to_min_lot
                         ? " (min-lot ↑risk)"
                         : ""}
+                      {decisionSizing?.capped_by_max_lot ? " (capped)" : ""}
                     </dd>
                   </div>
                   <div>
                     <dt>Risk amount</dt>
-                    <dd>{fmtCell(sizing?.risk_amount)}</dd>
+                    <dd>
+                      {fmtCell(
+                        decisionSizing?.implied_risk_amount ??
+                          decisionSizing?.final_risk_amount ??
+                          decisionSizing?.risk_amount,
+                      )}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Risk %</dt>
+                    <dd>
+                      {(() => {
+                        const pct =
+                          decisionSizing?.implied_risk_percent ??
+                          decisionSizing?.final_risk_percent;
+                        return pct == null ? "—" : `${pct.toFixed(2)}%`;
+                      })()}
+                    </dd>
                   </div>
                   <div>
                     <dt>Required margin</dt>
-                    <dd>{fmtCell(sizing?.required_margin)}</dd>
+                    <dd>{fmtCell(decisionSizing?.required_margin)}</dd>
                   </div>
                   <div>
                     <dt>Free margin</dt>
-                    <dd>{fmtCell(sizing?.free_margin)}</dd>
+                    <dd>{fmtCell(decisionSizing?.free_margin)}</dd>
                   </div>
                   <div>
                     <dt>Account</dt>

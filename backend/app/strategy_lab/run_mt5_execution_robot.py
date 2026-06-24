@@ -118,6 +118,41 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Allow rounding a sub-minimum lot up to volume_min (increases risk).",
     )
     parser.add_argument(
+        "--execution-sizing-mode",
+        choices=robot.SIZING_MODES,
+        default=robot.DEFAULT_EXECUTION_SIZING_MODE,
+        help=(
+            "Position sizing mode: risk_percent_auto (default), fixed_lot_manual "
+            "(uses --manual-lot), or risk_percent_with_max_lot (caps at --max-lot)."
+        ),
+    )
+    parser.add_argument(
+        "--manual-lot",
+        type=float,
+        default=None,
+        help="Manual fixed lot (required for fixed_lot_manual). Rounded to step.",
+    )
+    parser.add_argument(
+        "--max-lot",
+        type=float,
+        default=None,
+        help="Cap the auto risk-percent lot (risk_percent_with_max_lot).",
+    )
+    parser.add_argument(
+        "--max-manual-risk-percent",
+        type=float,
+        default=robot.DEFAULT_MAX_MANUAL_RISK_PERCENT,
+        help=(
+            "Implied-risk ceiling for a manual lot "
+            f"(default {robot.DEFAULT_MAX_MANUAL_RISK_PERCENT})."
+        ),
+    )
+    parser.add_argument(
+        "--allow-high-manual-risk",
+        action="store_true",
+        help="Permit demo execution when a manual lot exceeds the risk ceiling.",
+    )
+    parser.add_argument(
         "--output-dir",
         default=None,
         help=f"Where to write logs/state (default {default_output_dir()}).",
@@ -130,13 +165,18 @@ def _print_decision(decision: dict) -> None:
     signal = decision.get("signal") or {}
     sizing = decision.get("sizing") or {}
     reasons = decision.get("refusal_reasons") or []
+    warnings = sizing.get("sizing_warnings") or []
     line = (
         f"[{decision.get('mode')}] action={decision.get('intended_action')} "
         f"{decision.get('strategy_id')} {decision.get('symbol')} "
         f"{decision.get('timeframe')} signal={signal.get('signal_type')} "
-        f"@ {signal.get('signal_time')} lot={sizing.get('rounded_lot')} "
+        f"@ {signal.get('signal_time')} "
+        f"sizing={sizing.get('execution_sizing_mode')} "
+        f"lot={sizing.get('final_lot')} "
         f"entry={sizing.get('entry_price')} sl={sizing.get('initial_stop_price')}"
     )
+    if warnings:
+        line += f" warnings={','.join(str(w) for w in warnings)}"
     if reasons:
         line += f" refused={','.join(str(r) for r in reasons)}"
     print(line)
@@ -158,6 +198,11 @@ def _run_check(
     magic: int,
     deviation: int,
     allow_min_lot_rounding: bool,
+    execution_sizing_mode: str,
+    manual_lot: float | None,
+    max_lot: float | None,
+    max_manual_risk_percent: float,
+    allow_high_manual_risk: bool,
 ) -> None:
     decision = robot.run_once(
         config,
@@ -170,6 +215,11 @@ def _run_check(
         magic=magic,
         deviation=deviation,
         allow_min_lot_rounding=allow_min_lot_rounding,
+        execution_sizing_mode=execution_sizing_mode,
+        manual_lot=manual_lot,
+        max_lot=max_lot,
+        max_manual_risk_percent=max_manual_risk_percent,
+        allow_high_manual_risk=allow_high_manual_risk,
         generated_at=datetime.now(timezone.utc),
     )
     _print_decision(decision)
@@ -202,47 +252,43 @@ def main(argv: list[str] | None = None) -> int:
         execution_enabled = False
         mode = robot.MODE_DRY_RUN
 
+    # Shared per-check kwargs (sizing mode + safety flags) for both run paths.
+    check_kwargs = dict(
+        symbol=None,  # filled with the resolved symbol below
+        bars=args.bars,
+        execution_enabled=execution_enabled,
+        confirm_demo_execution=confirm,
+        magic=args.magic,
+        deviation=args.deviation,
+        allow_min_lot_rounding=args.allow_min_lot_rounding,
+        execution_sizing_mode=args.execution_sizing_mode,
+        manual_lot=args.manual_lot,
+        max_lot=args.max_lot,
+        max_manual_risk_percent=args.max_manual_risk_percent,
+        allow_high_manual_risk=args.allow_high_manual_risk,
+    )
+
     mt5 = bridge.load_mt5()
     bridge.initialize_mt5(mt5)
     try:
         symbol = bridge.resolve_symbol(mt5, requested_symbol)
+        check_kwargs["symbol"] = symbol
         print(
             f"MT5 demo execution robot v{robot.EXECUTION_ROBOT_VERSION} | "
             f"strategy={config['strategy_id']} symbol={symbol} timeframe="
             f"{robot.SUPPORTED_TIMEFRAME} bars={args.bars} | mode={mode} "
+            f"sizing={args.execution_sizing_mode} "
             f"(demo-only; dry-run default) | logs -> {store.output_dir}"
         )
 
         if args.once or args.poll_seconds is None:
-            _run_check(
-                config,
-                store,
-                mt5,
-                symbol=symbol,
-                bars=args.bars,
-                execution_enabled=execution_enabled,
-                confirm_demo_execution=confirm,
-                magic=args.magic,
-                deviation=args.deviation,
-                allow_min_lot_rounding=args.allow_min_lot_rounding,
-            )
+            _run_check(config, store, mt5, **check_kwargs)
             return 0
 
         print(f"Polling every {args.poll_seconds}s. Press Ctrl-C to stop.")
         while True:
             try:
-                _run_check(
-                    config,
-                    store,
-                    mt5,
-                    symbol=symbol,
-                    bars=args.bars,
-                    execution_enabled=execution_enabled,
-                    confirm_demo_execution=confirm,
-                    magic=args.magic,
-                    deviation=args.deviation,
-                    allow_min_lot_rounding=args.allow_min_lot_rounding,
-                )
+                _run_check(config, store, mt5, **check_kwargs)
             except bridge.BridgeError as exc:
                 print(f"WARN: {exc}", file=sys.stderr)
             except robot.ExecutionError as exc:

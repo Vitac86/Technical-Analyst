@@ -10,9 +10,16 @@ inject experimental research-only knobs).
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
+
+# v1.9 position sizing modes for the demo execution robot (long-only).
+ExecutionSizingMode = Literal[
+    "risk_percent_auto",
+    "fixed_lot_manual",
+    "risk_percent_with_max_lot",
+]
 
 from app.strategy_lab.presets import OVERRIDABLE_KEYS
 
@@ -283,7 +290,22 @@ class SaveExecutionConfigRequest(BaseModel):
     name: Optional[str] = None
 
 
-class ExecutionDryRunRequest(BaseModel):
+class ExecutionSizingFields(BaseModel):
+    """v1.9 position sizing controls shared by every execution request.
+
+    Defaults preserve the v1.8 behaviour (auto risk-percent sizing). ``manual_lot``
+    is required only for ``fixed_lot_manual``; ``max_lot`` only caps in
+    ``risk_percent_with_max_lot``. Demo-only safety gates are unchanged.
+    """
+
+    execution_sizing_mode: ExecutionSizingMode = "risk_percent_auto"
+    manual_lot: Optional[float] = Field(default=None, gt=0, le=1000)
+    max_lot: Optional[float] = Field(default=None, gt=0, le=1000)
+    max_manual_risk_percent: float = Field(default=3.0, gt=0, le=100)
+    allow_high_manual_risk: bool = False
+
+
+class ExecutionDryRunRequest(ExecutionSizingFields):
     """Run one dry-run decision (never sends orders, safe on any account)."""
 
     config_path: Optional[str] = None
@@ -300,7 +322,7 @@ class ExecutionDemoOnceRequest(ExecutionDryRunRequest):
     confirm_demo_execution: bool = False
 
 
-class StartExecutionRequest(BaseModel):
+class StartExecutionRequest(ExecutionSizingFields):
     """Start the polling execution robot (dry-run unless demo is confirmed)."""
 
     config_path: str

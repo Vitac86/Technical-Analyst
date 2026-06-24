@@ -2792,3 +2792,479 @@ a {
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
+
+/* =========================================================================
+   v1.9 Trading-first Strategy Lab: tabs, compact status cards, monitor.
+   ========================================================================= */
+
+/* Single compact warning strip at the top of the page. */
+.sl-warning-strip {
+  border: 1px solid #4a3a1f;
+  background: #211b10;
+  color: #e3c98a;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+/* --- Tab bar --- */
+.sl-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  border-bottom: 1px solid #20262f;
+  padding-bottom: 2px;
+}
+
+.sl-tab {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: 2px solid transparent;
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+  font: inherit;
+  color: #97a3b3;
+  padding: 9px 16px;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.sl-tab:hover {
+  color: #d4dbe4;
+  background: #161b22;
+}
+
+.sl-tab-active {
+  color: #eaf0f7;
+  background: #131820;
+  border-color: #20262f;
+  border-bottom-color: #2f7d6d;
+}
+
+.sl-tab-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13.5px;
+  font-weight: 800;
+}
+
+.sl-tab-live {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #4fd6a4;
+  box-shadow: 0 0 0 3px rgba(79, 214, 164, 0.18);
+}
+
+.sl-tab-hint {
+  font-size: 11px;
+  color: #6f7b8a;
+  font-weight: 600;
+}
+
+.sl-tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* --- Trading Monitor --- */
+.tm-panel {
+  gap: 14px;
+}
+
+.tm-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.tm-toolbar-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tm-note-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 800;
+  color: #e0b15a;
+  background: #2a2113;
+  border: 1px solid #4a3a1f;
+  border-radius: 999px;
+  padding: 4px 12px;
+}
+
+.tm-toolbar-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.tm-updated {
+  font-size: 12px;
+  color: #6f7b8a;
+}
+
+/* A. Top status row */
+.tm-status-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.tm-status-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #20262f;
+  border-left-width: 4px;
+  border-radius: 10px;
+  background: #131820;
+  padding: 12px 14px;
+}
+
+.tm-status-label {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6f7b8a;
+}
+
+.tm-status-value {
+  font-size: 16px;
+  font-weight: 900;
+  color: #eaf0f7;
+}
+
+.tm-status-ok {
+  border-left-color: #4fd6a4;
+}
+
+.tm-status-warn {
+  border-left-color: #e0b15a;
+}
+
+.tm-status-err {
+  border-left-color: #ff7a7a;
+}
+
+.tm-status-idle {
+  border-left-color: #3a4452;
+}
+
+/* Responsive two-column grid for cards */
+.tm-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+}
+
+.tm-card {
+  border: 1px solid #20262f;
+  border-radius: 10px;
+  background: #131820;
+  padding: 14px 16px;
+}
+
+.tm-card-title {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 800;
+  color: #d4dbe4;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* A key/value pair that should span the full card width. */
+.tm-kv-wide {
+  grid-column: 1 / -1;
+}
+
+.tm-refusals {
+  margin-top: 10px;
+}
+
+/* D. Controls card */
+.tm-controls-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.tm-config-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.tm-config-select {
+  flex: 1 1 320px;
+  max-width: 520px;
+}
+
+.tm-control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-top: 1px solid #20262f;
+  padding-top: 12px;
+}
+
+.tm-control-group-label {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6f7b8a;
+}
+
+/* Demo execution controls are visually separated and warning-colored. */
+.tm-demo-group {
+  background: #1a120c;
+  border: 1px solid #5a3417;
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-top: 4px;
+}
+
+.tm-demo-label {
+  color: #ffcaa0;
+}
+
+.tm-demo-warning {
+  margin: 0;
+}
+
+.tm-minlot {
+  margin-top: 2px;
+}
+
+.tm-demo-actions {
+  margin-top: 4px;
+}
+
+.tm-demo-hint {
+  margin-top: 2px;
+}
+
+/* E. Mini history tables (compact, max 5 rows) */
+.tm-mini-table {
+  width: 100%;
+}
+
+.tm-mini-table td,
+.tm-mini-table th {
+  white-space: nowrap;
+}
+
+.tm-mini-table .slb-table-reason {
+  white-space: normal;
+  max-width: 220px;
+}
+
+/* --- Research Notes --- */
+.sl-research-section {
+  margin-top: 0;
+}
+
+.sl-research-strategies {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 14px;
+}
+
+.sl-research-card {
+  border: 1px solid #20262f;
+  border-radius: 10px;
+  background: #131820;
+  padding: 14px 16px;
+}
+
+.sl-research-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.sl-research-desc,
+.sl-research-use {
+  color: #b9c4d2;
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 8px 0;
+}
+
+.sl-research-use {
+  color: #97a3b3;
+}
+
+.sl-research-safety p {
+  color: #c3ccd8;
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 0 0 10px;
+}
+
+.sl-research-mlnote {
+  color: #a9c7e6 !important;
+}
+
+@media (max-width: 640px) {
+  .sl-tab {
+    padding: 8px 12px;
+  }
+  .sl-tab-label {
+    font-size: 12.5px;
+  }
+}
+
+/* =========================================================================
+   v1.9 Position sizing controls (Demo Robot panel + Trading Monitor).
+   ========================================================================= */
+.ps-block {
+  border: 1px solid #2a3038;
+  border-radius: 10px;
+  background: #141922;
+  padding: 12px 14px;
+}
+
+.ps-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.ps-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: #d4dbe4;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ps-mode {
+  min-width: 220px;
+}
+
+.ps-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.ps-note {
+  margin: 0;
+  font-size: 12.5px;
+  color: #97a3b3;
+  line-height: 1.5;
+}
+
+.ps-hint {
+  margin: 0;
+  font-size: 12px;
+  color: #6f7b8a;
+}
+
+.ps-field {
+  max-width: 220px;
+}
+
+.ps-risk-field {
+  max-width: 180px;
+}
+
+.ps-quick {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ps-quick-btn {
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ps-error {
+  margin: 0;
+}
+
+.ps-allow {
+  margin-top: 2px;
+}
+
+.ps-warn {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #e0b15a;
+}
+
+.ps-warn-strong {
+  color: #ffb3b3;
+  font-weight: 600;
+}
+
+.ps-readout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 6px 16px;
+  margin: 6px 0 0;
+  padding: 10px 12px;
+  border: 1px solid #20262f;
+  border-radius: 8px;
+  background: #171e27;
+}
+
+.ps-readout div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ps-readout dt {
+  font-size: 11px;
+  color: #6f7b8a;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.ps-readout dd {
+  margin: 0;
+  font-size: 13px;
+  color: #d4dbe4;
+}
+
+/* Sizing chip + warnings on the latest decision card. */
+.erp-sizing-chip {
+  color: #a9d8ff;
+  background: #18242f;
+}
+
+.erp-sizing-warnings {
+  color: #e0b15a;
+}
+
+.erp-risk-block,
+.tm-demo-hint {
+  margin-top: 10px;
+}

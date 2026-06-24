@@ -87,20 +87,26 @@ panel and is **collapsed by default** with a strong warning. Open it, then:
 2. **Safety checklist** — badges for MT5 connected, account detected, demo
    account, strategy D supported, direction long-only, ML disabled, mode, and
    one-position-only. They refresh from the latest decision.
-3. **Dry-run** — click **Dry-run once** to see what the robot *would* do. Safe on
+3. **Position sizing** — pick **Auto risk %** (default), **Manual lot**, or
+   **Auto risk % with max lot**. Manual lot has quick-pick buttons (0.01–0.10), a
+   max-manual-risk % field and an **Allow high manual risk** checkbox. Read-outs
+   (calculated/resolved/final lot, implied/final risk) update after a dry-run.
+4. **Dry-run** — click **Dry-run once** to see what the robot *would* do. Safe on
    any account; never sends an order.
-4. **Demo execution controls** — tick **both** confirmations
+5. **Demo execution controls** — tick **both** confirmations
    ("I understand this can place orders on the connected MT5 DEMO account" and
    "I confirm the connected account is a demo account"). The **Demo execution
    once** and **Start demo execution polling** buttons stay disabled until both
-   are ticked.
-5. **Polling** — set the poll interval and use **Start dry-run polling** or
+   are ticked, the sizing inputs are valid, and any high-manual-risk warning is
+   acknowledged.
+6. **Polling** — set the poll interval and use **Start dry-run polling** or
    **Start demo execution polling** / **Stop robot**.
-6. **Latest decision** — shows mode, action, signal, entry/SL/lot, risk amount,
-   required/free margin, position, trailing diagnostics and the order result.
-7. **Execution history** — recent decisions (generated_at, mode, action,
+7. **Latest decision** — shows mode, sizing mode, action, signal, entry/SL,
+   final lot, implied/final risk amount and %, required/free margin, position,
+   trailing diagnostics, sizing warnings and the order result.
+8. **Execution history** — recent decisions (generated_at, mode, action,
    signal_time, signal type, symbol, lot, entry, initial SL, retcode, refusals).
-8. **Logs** — collapsed by default; stdout/stderr tails of the polling process.
+9. **Logs** — collapsed by default; stdout/stderr tails of the polling process.
 
 The wording is deliberately demo-only: **Dry-run**, **Would open BUY**,
 **Opened BUY on demo**, **Trailing SL update**. There is no "trade now" / "go
@@ -157,7 +163,13 @@ Refusal reasons you may see:
 * `demo_only_flag_required` / `execution_not_enabled` — execution gates.
 * `lot_below_minimum` — computed lot below `volume_min`
   (pass `allow_min_lot_rounding` to round up to `volume_min`, which **increases
-  risk** and sets `increased_risk_due_to_min_lot`).
+  risk** and sets `increased_risk_due_to_min_lot`). A **manual** lot is never
+  silently bumped — it is refused instead.
+* `lot_above_maximum` — lot above `volume_max` (manual lot too large).
+* `manual_lot_required` — `fixed_lot_manual` with no positive `manual_lot`.
+* `manual_risk_too_high` — a manual lot's implied risk exceeds
+  `max_manual_risk_percent` in demo execution and `allow_high_manual_risk` is
+  off (in dry-run this is only a warning, not a refusal).
 * `margin_insufficient` — `required_margin > free_margin`.
 * `invalid_lot_sizing` — missing inputs (equity / ATR / price).
 * `order_send_failed` — MT5 rejected the order (see `order_result.retcode`).
@@ -175,6 +187,80 @@ rounded_lot       = round_down(raw_lot, volume_step)   # capped at volume_max
 `entry_price` is the current **ask**. `contract_size` prefers
 `symbol_info.trade_contract_size`, then the config, then `100.0` (XAUUSD).
 `required_margin` uses `mt5.order_calc_margin` when available.
+
+## 9a. Position sizing modes (v1.9)
+
+The robot supports three **position sizing modes** (long-only; the demo-only
+safety gates above are unchanged). The mode is chosen in the UI **Position
+sizing** block, the API request, or the CLI. `initial_stop_price`/`risk_per_unit`
+are always computed from the ATR stop, so the implied risk of any lot is shown.
+
+| Mode | Sizes from | Notes |
+| --- | --- | --- |
+| `risk_percent_auto` *(default)* | equity × risk % | unchanged v1.8 behaviour |
+| `fixed_lot_manual` | your `manual_lot` | `risk_percent` is **not** used to size |
+| `risk_percent_with_max_lot` | risk % then capped at `max_lot` | `min(auto_lot, max_lot)` |
+
+**Manual lot (`fixed_lot_manual`).** `manual_lot` must be `> 0`. It is rounded
+down to `volume_step` (warning `manual_lot_rounded_to_symbol_step`), refused if
+below `volume_min` (`lot_below_minimum`) or above `volume_max`
+(`lot_above_maximum`), and margin is still checked. The **implied risk** is
+reported:
+
+```
+implied_risk_amount  = risk_per_unit * contract_size * rounded_lot
+implied_risk_percent = implied_risk_amount / account_equity * 100
+```
+
+If `implied_risk_percent > max_manual_risk_percent` (default **3.0**):
+
+* **dry-run** — allowed, but `sizing_status = warning_manual_risk_too_high`
+  (warning `manual_risk_exceeds_max_manual_risk_percent`);
+* **demo execution** — **refused** (`manual_risk_too_high`) **unless**
+  `allow_high_manual_risk = true`.
+
+> ⚠️ A manual lot can risk **more** than the strategy's configured risk %.
+> **Use dry-run first** and check the implied risk before any demo execution.
+
+**Max-lot cap (`risk_percent_with_max_lot`).** Sizes by risk %, then caps:
+`final_lot = round_down(min(auto_lot, max_lot), volume_step)`. The decision
+reports `auto_lot_before_cap`, `max_lot` and `capped_by_max_lot`.
+
+**Extra `sizing` fields (v1.9):** `execution_sizing_mode`,
+`manual_lot_requested`, `max_lot`, `auto_lot_before_cap`, `raw_lot`,
+`rounded_lot`, `final_lot`, `capped_by_max_lot`, `implied_risk_amount`,
+`implied_risk_percent`, `final_risk_amount`, `final_risk_percent`,
+`max_manual_risk_percent`, `allow_high_manual_risk`, `sizing_warnings`.
+
+**API/CLI fields (all default to the v1.8 behaviour):**
+`execution_sizing_mode` (`risk_percent_auto`), `manual_lot` (`null`), `max_lot`
+(`null`), `max_manual_risk_percent` (`3.0`), `allow_high_manual_risk` (`false`).
+They are accepted by `POST /execution/dry-run-once`, `/demo-once` and `/start`.
+
+```bash
+# Dry-run with a manual 0.05 lot (safe; never sends)
+python backend/app/strategy_lab/run_mt5_execution_robot.py \
+  --config MetaTrader_Data/configs/D_supertrend_h4.json --once \
+  --execution-sizing-mode fixed_lot_manual --manual-lot 0.05
+
+# Demo execution with a manual 0.05 lot (detected demo account only)
+python backend/app/strategy_lab/run_mt5_execution_robot.py \
+  --config MetaTrader_Data/configs/D_supertrend_h4.json --once \
+  --execution-enabled --confirm-demo-execution \
+  --execution-sizing-mode fixed_lot_manual --manual-lot 0.05
+
+# Auto risk %, capped at 0.10 lot
+python backend/app/strategy_lab/run_mt5_execution_robot.py \
+  --config MetaTrader_Data/configs/D_supertrend_h4.json --once \
+  --execution-sizing-mode risk_percent_with_max_lot --max-lot 0.10
+
+# A high-risk manual lot is refused in demo unless you allow it
+python backend/app/strategy_lab/run_mt5_execution_robot.py \
+  --config MetaTrader_Data/configs/D_supertrend_h4.json --once \
+  --execution-enabled --confirm-demo-execution \
+  --execution-sizing-mode fixed_lot_manual --manual-lot 0.50 \
+  --max-manual-risk-percent 3.0 --allow-high-manual-risk
+```
 
 ## 10. Trailing SL (upward only)
 

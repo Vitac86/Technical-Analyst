@@ -8,6 +8,7 @@ import type {
   ExecutionHistoryResponse,
   ExecutionLatestResponse,
   ExecutionLogsResponse,
+  ExecutionSizingMode,
   ExecutionStatus,
   LatestSignalResponse,
   Mt5Readiness,
@@ -202,11 +203,35 @@ export function getSignalLogs(lines = 100): Promise<SignalLogsResponse> {
 // There is intentionally no "go live" call.
 // ---------------------------------------------------------------------------
 
-export interface ExecutionRunOptions {
+export interface ExecutionSizingOptions {
+  /** risk_percent_auto (default) | fixed_lot_manual | risk_percent_with_max_lot */
+  executionSizingMode?: ExecutionSizingMode;
+  /** Required (>0) for fixed_lot_manual; ignored otherwise. */
+  manualLot?: number | null;
+  /** Caps the auto lot for risk_percent_with_max_lot; ignored otherwise. */
+  maxLot?: number | null;
+  /** Implied-risk ceiling for a manual lot (default 3.0). */
+  maxManualRiskPercent?: number;
+  /** Permit demo execution when a manual lot exceeds the ceiling. */
+  allowHighManualRisk?: boolean;
+}
+
+export interface ExecutionRunOptions extends ExecutionSizingOptions {
   bars?: number;
   magic?: number;
   deviation?: number;
   allowMinLotRounding?: boolean;
+}
+
+/** Serialize the v1.9 position-sizing controls into the request body. */
+function sizingBody(opts: ExecutionSizingOptions) {
+  return {
+    execution_sizing_mode: opts.executionSizingMode ?? "risk_percent_auto",
+    manual_lot: opts.manualLot ?? null,
+    max_lot: opts.maxLot ?? null,
+    max_manual_risk_percent: opts.maxManualRiskPercent ?? 3.0,
+    allow_high_manual_risk: opts.allowHighManualRisk ?? false,
+  };
 }
 
 function execBody(configPath: string, opts: ExecutionRunOptions = {}) {
@@ -216,6 +241,7 @@ function execBody(configPath: string, opts: ExecutionRunOptions = {}) {
     magic: opts.magic ?? 170801,
     deviation: opts.deviation ?? 50,
     allow_min_lot_rounding: opts.allowMinLotRounding ?? false,
+    ...sizingBody(opts),
   };
 }
 
@@ -262,16 +288,18 @@ export function executionDemoOnce(
 }
 
 /** Start the polling robot. Demo execution requires explicit confirmation. */
-export function startExecutionRobot(params: {
-  configPath: string;
-  pollSeconds?: number;
-  bars?: number;
-  magic?: number;
-  deviation?: number;
-  demoExecutionEnabled?: boolean;
-  confirmDemoExecution?: boolean;
-  allowMinLotRounding?: boolean;
-}): Promise<ExecutionStatus> {
+export function startExecutionRobot(
+  params: {
+    configPath: string;
+    pollSeconds?: number;
+    bars?: number;
+    magic?: number;
+    deviation?: number;
+    demoExecutionEnabled?: boolean;
+    confirmDemoExecution?: boolean;
+    allowMinLotRounding?: boolean;
+  } & ExecutionSizingOptions,
+): Promise<ExecutionStatus> {
   return request<ExecutionStatus>("/execution/start", {
     method: "POST",
     body: JSON.stringify({
@@ -283,6 +311,7 @@ export function startExecutionRobot(params: {
       demo_execution_enabled: params.demoExecutionEnabled ?? false,
       confirm_demo_execution: params.confirmDemoExecution ?? false,
       allow_min_lot_rounding: params.allowMinLotRounding ?? false,
+      ...sizingBody(params),
     }),
   });
 }
