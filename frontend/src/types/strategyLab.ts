@@ -387,3 +387,202 @@ export interface SignalLogsResponse {
   stderr_tail: string;
   execution_enabled: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// v1.8 MT5 demo execution robot (separate API: /api/strategy-lab/execution).
+// Demo-only, dry-run by default. No "go live" switch exists.
+// ---------------------------------------------------------------------------
+
+export type ExecutionMode = "dry_run" | "demo_execution" | "refused";
+
+export type ExecutionAction =
+  | "no_action"
+  | "would_open_buy"
+  | "opened_buy"
+  | "would_update_trailing_sl"
+  | "updated_trailing_sl"
+  | "refused";
+
+export interface ExecutionAccount {
+  login: number | null;
+  server: string | null;
+  trade_mode: string; // demo | contest | real | unknown
+  is_demo: boolean;
+  equity: number | null;
+  free_margin: number | null;
+}
+
+export interface ExecutionSignal {
+  signal_time: string | null;
+  signal_type: string | null; // BUY | NONE
+  reason_human: string | null;
+  strategy_regime: string | null;
+}
+
+export interface ExecutionMarket {
+  bid: number | null;
+  ask: number | null;
+  latest_close: number | null;
+  atr: number | null;
+}
+
+export interface ExecutionSizing {
+  equity: number | null;
+  risk_percent: number | null;
+  risk_amount: number | null;
+  entry_price: number | null;
+  initial_stop_price: number | null;
+  risk_per_unit: number | null;
+  atr_value: number | null;
+  contract_size: number | null;
+  raw_lot: number | null;
+  rounded_lot: number | null;
+  volume_min: number | null;
+  volume_max: number | null;
+  volume_step: number | null;
+  required_margin: number | null;
+  free_margin: number | null;
+  sizing_status: string; // ok | lot_below_min | margin_insufficient | invalid_sizing
+  increased_risk_due_to_min_lot: boolean;
+}
+
+export interface ExecutionPositionState {
+  has_position: boolean;
+  ticket: number | null;
+  volume: number | null;
+  price_open: number | null;
+  sl: number | null;
+  tp: number | null;
+}
+
+export interface ExecutionOrderResult {
+  retcode: number | null;
+  order: number | null;
+  deal: number | null;
+  price: number | null;
+  volume: number | null;
+  comment: string | null;
+  message: string | null;
+  ok?: boolean;
+}
+
+export interface ExecutionTrailing {
+  current_sl: number | null;
+  trailing_stop_candidate: number | null;
+  would_improve_sl: boolean;
+  update_sent: boolean;
+}
+
+export interface ExecutionDecision {
+  decision_id: string;
+  generated_at: string;
+  execution_robot_version: string;
+  mode: ExecutionMode;
+  execution_enabled: boolean;
+  demo_only: boolean;
+  account: ExecutionAccount;
+  symbol: string;
+  timeframe: string;
+  strategy_id: string;
+  signal: ExecutionSignal;
+  market: ExecutionMarket;
+  sizing: ExecutionSizing;
+  position_state: ExecutionPositionState;
+  intended_action: ExecutionAction;
+  refusal_reasons: string[];
+  notes: string[];
+  order_result: ExecutionOrderResult | null;
+  trailing: ExecutionTrailing;
+}
+
+export interface ExecutionConfigSummary {
+  strategy_id: string | null;
+  symbol: string | null;
+  timeframe: string | null;
+  direction_mode: string | null;
+  exit_mode: string | null;
+  sizing_mode: string | null;
+  ml_filter_enabled: boolean;
+  risk_percent: number | null;
+  initial_stop_loss_atr: number | null;
+  trailing_stop_atr: number | null;
+  take_profit_atr: number | null;
+  is_supported: boolean;
+  unsupported_reason: string | null;
+}
+
+export interface SaveExecutionConfigResponse {
+  file_name: string;
+  path: string;
+  config_summary: ExecutionConfigSummary;
+  execution_robot_version: string;
+}
+
+export interface ExecutionSavedConfig {
+  file_name: string;
+  path: string;
+  strategy_id: string | null;
+  symbol: string | null;
+  timeframe: string | null;
+  created_at: string | null;
+  modified_at: string | null;
+  ml_filter_enabled: boolean;
+  is_supported: boolean;
+  unsupported_reason: string | null;
+}
+
+export interface ExecutionConfigsResponse {
+  configs: ExecutionSavedConfig[];
+  supported_strategy_id: string;
+  execution_robot_version: string;
+}
+
+export interface ExecutionStatus {
+  running: boolean;
+  pid: number | null;
+  started_at: string | null;
+  mode: string | null;
+  config_path: string | null;
+  poll_seconds: number | null;
+  bars: number | null;
+  status: string;
+  execution_robot_version: string;
+  started?: boolean;
+  stopped?: boolean;
+  message?: string;
+  latest_execution_decision?: ExecutionDecision | null;
+  latest_log_excerpt?: string;
+  error_excerpt?: string | null;
+}
+
+export interface ExecutionLatestResponse {
+  latest_execution_decision: ExecutionDecision | null;
+  execution_robot_version: string;
+}
+
+export interface ExecutionHistoryRow {
+  decision_id: string;
+  generated_at: string;
+  mode: string;
+  intended_action: string;
+  signal_time: string;
+  signal_type: string;
+  symbol: string;
+  lot: string;
+  entry_price: string;
+  initial_stop_price: string;
+  order_retcode: string;
+  refusal_reasons: string;
+}
+
+export interface ExecutionHistoryResponse {
+  events: ExecutionHistoryRow[];
+  count: number;
+  execution_robot_version: string;
+}
+
+export interface ExecutionLogsResponse {
+  stdout_tail: string;
+  stderr_tail: string;
+  execution_robot_version: string;
+}

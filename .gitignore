@@ -48,5 +48,7 @@ ml/reports/
 # MetaTrader local exports and generated research reports
 MetaTrader_Data/mt5_exports/
 MetaTrader_Data/reports/
-# Signal-bridge saved configs (generated from the UI; never commit)
+# Demo execution robot state/logs/decisions (covered by reports/, kept explicit)
+MetaTrader_Data/reports/mt5_execution_robot/
+# Signal-bridge saved configs and execution-robot configs (generated from the UI)
 MetaTrader_Data/configs/

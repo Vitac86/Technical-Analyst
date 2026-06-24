@@ -2530,3 +2530,265 @@ a {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* ---------------------------------------------------------------------------
+   v1.8 MT5 demo execution robot panel (separate, demo-only, dry-run default)
+   --------------------------------------------------------------------------- */
+.erp-panel {
+  border: 1px solid #3a2a1a;
+}
+
+.erp-collapse-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+}
+
+.erp-collapse-toggle h2 {
+  margin: 0;
+}
+
+.erp-caret {
+  color: #e0b15a;
+  font-size: 14px;
+}
+
+.erp-danger-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 900;
+  color: #ffcaa0;
+  background: #2c1a10;
+  border: 1px solid #5a3417;
+  border-radius: 999px;
+  padding: 4px 12px;
+  letter-spacing: 0.04em;
+}
+
+.erp-warning {
+  margin: 12px 0 4px;
+  padding: 10px 14px;
+  background: #271b10;
+  border: 1px solid #5a3417;
+  border-radius: 8px;
+  color: #f0c79a;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.erp-warning-strong {
+  background: #2c1414;
+  border-color: #5a2020;
+  color: #ffb3b3;
+  font-weight: 600;
+}
+
+.erp-config-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  font-size: 13px;
+  color: #d4dbe4;
+}
+
+.erp-checklist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.erp-checklist-note {
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  color: #97a3b3;
+}
+
+.erp-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 3px 11px;
+}
+
+.erp-badge-ok {
+  color: #8fe0c4;
+  background: #16261f;
+}
+
+.erp-badge-err {
+  color: #ff9a9a;
+  background: #2c1717;
+}
+
+.erp-badge-idle {
+  color: #97a3b3;
+  background: #1e2530;
+}
+
+.erp-mode-note,
+.erp-checklist-note {
+  line-height: 1.5;
+}
+
+.erp-mode-note {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  color: #97a3b3;
+}
+
+.erp-check-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: #b9c4d2;
+}
+
+.erp-demo-section {
+  background: #1a120c;
+  border-radius: 10px;
+  padding: 14px 16px 8px;
+  margin-top: 14px;
+}
+
+.erp-check-block {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 0;
+  font-size: 13px;
+  color: #e7c6a4;
+  line-height: 1.4;
+}
+
+.erp-demo-actions {
+  margin-top: 12px;
+}
+
+.erp-poll-row {
+  margin-top: 10px;
+}
+
+.btn-danger {
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 9px 14px;
+  background: #b5462f;
+  color: #fff;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #c9543b;
+}
+
+.btn-danger:disabled {
+  background: #3a2620;
+  color: #8a6f66;
+  cursor: not-allowed;
+}
+
+.erp-decision {
+  background: #131820;
+  border: 1px solid #20262f;
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+
+.erp-decision-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.erp-bigbadge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 0.03em;
+  border-radius: 8px;
+  padding: 4px 14px;
+}
+
+.erp-bigbadge-exec {
+  color: #0c1410;
+  background: #4fd6a4;
+}
+
+.erp-bigbadge-would {
+  color: #0c1014;
+  background: #56ccf2;
+}
+
+.erp-bigbadge-refused {
+  color: #fff;
+  background: #b5462f;
+}
+
+.erp-bigbadge-none {
+  color: #c3ccd8;
+  background: #2a323e;
+}
+
+.erp-mode-chip {
+  font-size: 12px;
+  font-weight: 700;
+  color: #b9c4d2;
+  background: #1e2530;
+  border-radius: 999px;
+  padding: 3px 11px;
+}
+
+.erp-decision-time {
+  font-size: 12px;
+  color: #6f7b8a;
+  margin-left: auto;
+}
+
+.erp-refusals {
+  margin: 0 0 12px;
+  padding-left: 18px;
+  color: #ff9a9a;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.erp-notes {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: #e0b15a;
+}
+
+.erp-subcard {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #20262f;
+  border-radius: 8px;
+  background: #171e27;
+}
+
+.erp-subcard h4 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #6f7b8a;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}

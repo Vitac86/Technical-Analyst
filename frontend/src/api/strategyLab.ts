@@ -3,10 +3,17 @@ import type {
   BacktestResponse,
   BridgeProcessStatus,
   CheckOnceResponse,
+  ExecutionConfigsResponse,
+  ExecutionDecision,
+  ExecutionHistoryResponse,
+  ExecutionLatestResponse,
+  ExecutionLogsResponse,
+  ExecutionStatus,
   LatestSignalResponse,
   Mt5Readiness,
   PresetsResponse,
   RecentChecksResponse,
+  SaveExecutionConfigResponse,
   SaveSignalConfigResponse,
   SignalConfigsResponse,
   SignalHistoryResponse,
@@ -187,4 +194,122 @@ export function getRecentChecks(limit = 20): Promise<RecentChecksResponse> {
 /** The last `lines` of the bridge stdout/stderr logs. */
 export function getSignalLogs(lines = 100): Promise<SignalLogsResponse> {
   return request<SignalLogsResponse>(`/signals/logs?lines=${lines}`);
+}
+
+// ---------------------------------------------------------------------------
+// v1.8 MT5 demo execution robot control (separate API; demo-only, dry-run
+// default). These live under /api/strategy-lab/execution (relative to BASE_URL).
+// There is intentionally no "go live" call.
+// ---------------------------------------------------------------------------
+
+export interface ExecutionRunOptions {
+  bars?: number;
+  magic?: number;
+  deviation?: number;
+  allowMinLotRounding?: boolean;
+}
+
+function execBody(configPath: string, opts: ExecutionRunOptions = {}) {
+  return {
+    config_path: configPath,
+    bars: opts.bars ?? 500,
+    magic: opts.magic ?? 170801,
+    deviation: opts.deviation ?? 50,
+    allow_min_lot_rounding: opts.allowMinLotRounding ?? false,
+  };
+}
+
+/** Save the current strategy config for the demo execution robot (D-only). */
+export function saveExecutionConfig(
+  config: StrategyConfig,
+  name?: string,
+): Promise<SaveExecutionConfigResponse> {
+  return request<SaveExecutionConfigResponse>("/execution/configs/save", {
+    method: "POST",
+    body: JSON.stringify({ config, name: name ?? null }),
+  });
+}
+
+/** List saved configs, flagged with whether the robot supports each one. */
+export function listExecutionConfigs(): Promise<ExecutionConfigsResponse> {
+  return request<ExecutionConfigsResponse>("/execution/configs");
+}
+
+/** Run one dry-run decision (never sends an order; safe on any account). */
+export function executionDryRunOnce(
+  configPath: string,
+  opts: ExecutionRunOptions = {},
+): Promise<ExecutionDecision> {
+  return request<ExecutionDecision>("/execution/dry-run-once", {
+    method: "POST",
+    body: JSON.stringify(execBody(configPath, opts)),
+  });
+}
+
+/** Run one demo-execution decision. Refused unless confirmed + demo account. */
+export function executionDemoOnce(
+  configPath: string,
+  confirmDemoExecution: boolean,
+  opts: ExecutionRunOptions = {},
+): Promise<ExecutionDecision> {
+  return request<ExecutionDecision>("/execution/demo-once", {
+    method: "POST",
+    body: JSON.stringify({
+      ...execBody(configPath, opts),
+      confirm_demo_execution: confirmDemoExecution,
+    }),
+  });
+}
+
+/** Start the polling robot. Demo execution requires explicit confirmation. */
+export function startExecutionRobot(params: {
+  configPath: string;
+  pollSeconds?: number;
+  bars?: number;
+  magic?: number;
+  deviation?: number;
+  demoExecutionEnabled?: boolean;
+  confirmDemoExecution?: boolean;
+  allowMinLotRounding?: boolean;
+}): Promise<ExecutionStatus> {
+  return request<ExecutionStatus>("/execution/start", {
+    method: "POST",
+    body: JSON.stringify({
+      config_path: params.configPath,
+      poll_seconds: params.pollSeconds ?? 60,
+      bars: params.bars ?? 500,
+      magic: params.magic ?? 170801,
+      deviation: params.deviation ?? 50,
+      demo_execution_enabled: params.demoExecutionEnabled ?? false,
+      confirm_demo_execution: params.confirmDemoExecution ?? false,
+      allow_min_lot_rounding: params.allowMinLotRounding ?? false,
+    }),
+  });
+}
+
+/** Stop the managed polling robot process. */
+export function stopExecutionRobot(): Promise<ExecutionStatus> {
+  return request<ExecutionStatus>("/execution/stop", { method: "POST" });
+}
+
+/** Robot status: process state + latest decision + log excerpts. */
+export function getExecutionStatus(): Promise<ExecutionStatus> {
+  return request<ExecutionStatus>("/execution/status");
+}
+
+/** The latest decision record (or null). */
+export function getLatestExecutionDecision(): Promise<ExecutionLatestResponse> {
+  return request<ExecutionLatestResponse>("/execution/latest");
+}
+
+/** Up to `limit` recent decisions (newest first). */
+export function getExecutionHistory(
+  limit = 50,
+): Promise<ExecutionHistoryResponse> {
+  return request<ExecutionHistoryResponse>(`/execution/history?limit=${limit}`);
+}
+
+/** The last `lines` of the robot stdout/stderr logs. */
+export function getExecutionLogs(lines = 100): Promise<ExecutionLogsResponse> {
+  return request<ExecutionLogsResponse>(`/execution/logs?lines=${lines}`);
 }

@@ -271,3 +271,43 @@ class StartBridgeRequest(BaseModel):
     config_path: str
     poll_seconds: int = Field(default=60, ge=5, le=86400)
     bars: int = Field(default=500, ge=2, le=5000)
+
+
+# ---------------------------------------------------------------------------
+# v1.8 MT5 demo execution robot control (separate, demo-only, dry-run default)
+# ---------------------------------------------------------------------------
+class SaveExecutionConfigRequest(BaseModel):
+    """Save a D strategy config for the demo execution robot (D-only)."""
+
+    config: dict[str, Any]
+    name: Optional[str] = None
+
+
+class ExecutionDryRunRequest(BaseModel):
+    """Run one dry-run decision (never sends orders, safe on any account)."""
+
+    config_path: Optional[str] = None
+    config: Optional[dict[str, Any]] = None
+    bars: int = Field(default=500, ge=2, le=5000)
+    magic: int = Field(default=170801, ge=1, le=2_147_483_647)
+    deviation: int = Field(default=50, ge=0, le=10_000)
+    allow_min_lot_rounding: bool = False
+
+
+class ExecutionDemoOnceRequest(ExecutionDryRunRequest):
+    """Run one demo-execution decision. Refused unless explicitly confirmed."""
+
+    confirm_demo_execution: bool = False
+
+
+class StartExecutionRequest(BaseModel):
+    """Start the polling execution robot (dry-run unless demo is confirmed)."""
+
+    config_path: str
+    poll_seconds: int = Field(default=60, ge=5, le=86400)
+    bars: int = Field(default=500, ge=2, le=5000)
+    magic: int = Field(default=170801, ge=1, le=2_147_483_647)
+    deviation: int = Field(default=50, ge=0, le=10_000)
+    demo_execution_enabled: bool = False
+    confirm_demo_execution: bool = False
+    allow_min_lot_rounding: bool = False

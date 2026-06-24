@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { exportConfig, getPresets, runBacktest } from "../api/strategyLab";
 import { CostScenarioSelector } from "../components/strategyLab/CostScenarioSelector";
 import { MetricCards } from "../components/strategyLab/MetricCards";
+import { MT5ExecutionRobotPanel } from "../components/strategyLab/MT5ExecutionRobotPanel";
 import { MT5SignalBridgePanel } from "../components/strategyLab/MT5SignalBridgePanel";
 import { ParameterPanel } from "../components/strategyLab/ParameterPanel";
 import { PeriodTables } from "../components/strategyLab/PeriodTables";
@@ -365,6 +366,9 @@ export function StrategyLabPage() {
 
       {/* K. MT5 signal-only bridge control (v1.7.1) */}
       <MT5SignalBridgePanel buildConfigBody={buildConfigBody} disabled={running} />
+
+      {/* L. MT5 demo execution robot (v1.8) — separate, demo-only, dry-run default */}
+      <MT5ExecutionRobotPanel buildConfigBody={buildConfigBody} disabled={running} />
     </div>
   );
 }

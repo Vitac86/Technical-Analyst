@@ -1,6 +1,10 @@
 from fastapi import FastAPI
 
-from app.api.v1.endpoints import strategy_lab, strategy_lab_signals
+from app.api.v1.endpoints import (
+    strategy_lab,
+    strategy_lab_execution,
+    strategy_lab_signals,
+)
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.logging import configure_logging
@@ -38,6 +42,12 @@ def create_app() -> FastAPI:
         strategy_lab_signals.router,
         prefix="/api/strategy-lab/signals",
         tags=["strategy-lab-signals"],
+    )
+    # Strategy Lab v1.8 demo execution robot (separate, demo-only, dry-run default).
+    application.include_router(
+        strategy_lab_execution.router,
+        prefix="/api/strategy-lab/execution",
+        tags=["strategy-lab-execution"],
     )
     return application
 
